@@ -322,6 +322,12 @@ func (m *ProbeManager) TriggerImmediateEgressProbe(hash node.Hash) {
 	m.enqueueProbe(hash, probeTaskKindEgress, probePriorityNormal)
 }
 
+// TriggerImmediateLatencyProbe enqueues an async latency probe for a node.
+// Caller returns immediately.
+func (m *ProbeManager) TriggerImmediateLatencyProbe(hash node.Hash) {
+	m.enqueueProbe(hash, probeTaskKindLatency, probePriorityNormal)
+}
+
 // EgressProbeResult holds the results of a synchronous egress probe.
 type EgressProbeResult struct {
 	EgressIP      string  `json:"egress_ip"`
@@ -433,6 +439,7 @@ func (m *ProbeManager) scanEgress() {
 		interval = m.maxEgressTestInterval()
 	}
 	lookahead := 15 * time.Second
+	subLookup := m.pool.MakeSubLookup()
 
 	m.pool.Range(func(h node.Hash, entry *node.NodeEntry) bool {
 		// Check stop signal.
@@ -440,6 +447,10 @@ func (m *ProbeManager) scanEgress() {
 		case <-m.stopCh:
 			return false
 		default:
+		}
+
+		if entry.IsDisabledBySubscriptions(subLookup) {
+			return true // disabled node -> skip periodic probe
 		}
 
 		if entry.Outbound.Load() == nil {
@@ -473,6 +484,7 @@ func (m *ProbeManager) scanLatency() {
 		maxAuthorityInterval = m.maxAuthorityLatencyTestInterval()
 	}
 	lookahead := 15 * time.Second
+	subLookup := m.pool.MakeSubLookup()
 	var authorities []string
 	if m.latencyAuthorities != nil {
 		authorities = m.latencyAuthorities()
@@ -483,6 +495,10 @@ func (m *ProbeManager) scanLatency() {
 		case <-m.stopCh:
 			return false
 		default:
+		}
+
+		if entry.IsDisabledBySubscriptions(subLookup) {
+			return true // disabled node -> skip periodic probe
 		}
 
 		if entry.Outbound.Load() == nil {
@@ -519,6 +535,9 @@ func (m *ProbeManager) runProbeWorker() {
 func (m *ProbeManager) executeTask(task probeTask) {
 	entry, ok := m.pool.GetEntry(task.key.hash)
 	if !ok || entry.Outbound.Load() == nil {
+		return
+	}
+	if entry.IsDisabledBySubscriptions(m.pool.MakeSubLookup()) {
 		return
 	}
 

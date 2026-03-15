@@ -577,6 +577,8 @@ type PlatformSpecFilter struct {
 type NodeSummary struct {
 	NodeHash                         string    `json:"node_hash"`
 	CreatedAt                        string    `json:"created_at"`
+	Enabled                          bool      `json:"enabled"`
+	DisplayTag                       string    `json:"display_tag,omitempty"`
 	HasOutbound                      bool      `json:"has_outbound"`
 	LastError                        string    `json:"last_error,omitempty"`
 	CircuitOpenSince                 *string   `json:"circuit_open_since"`
@@ -591,9 +593,10 @@ type NodeSummary struct {
 	Tags                             []NodeTag `json:"tags"`
 }
 
-// IsHealthy follows the unified health rule used across the backend.
-func (n NodeSummary) IsHealthy() bool {
-	return n.HasOutbound && n.CircuitOpenSince == nil
+// IsHealthyAndEnabled follows the node-summary health rule used by API/UI
+// aggregates: enabled, outbound-ready, and not circuit-open.
+func (n NodeSummary) IsHealthyAndEnabled() bool {
+	return n.Enabled && n.HasOutbound && n.CircuitOpenSince == nil
 }
 
 type NodeTag struct {
@@ -607,9 +610,15 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 	ns := NodeSummary{
 		NodeHash:     h.Hex(),
 		CreatedAt:    entry.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Enabled:      true,
 		HasOutbound:  entry.HasOutbound(),
 		LastError:    entry.GetLastError(),
 		FailureCount: int(entry.FailureCount.Load()),
+	}
+
+	if s != nil && s.Pool != nil {
+		ns.Enabled = !s.Pool.IsNodeDisabled(h)
+		ns.DisplayTag = s.Pool.ResolveNodeDisplayTag(h)
 	}
 
 	if cos := entry.CircuitOpenSince.Load(); cos > 0 {

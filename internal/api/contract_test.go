@@ -647,11 +647,13 @@ func TestAPIContract_PlatformListIncludesRoutableNodeCount(t *testing.T) {
 	srv, cp, _ := newControlPlaneTestServer(t)
 
 	platformID := mustCreatePlatform(t, srv, "routable-count-target")
-	cp.SubMgr.Register(subscription.NewSubscription("sub-test", "sub-test", "https://example.com/sub", true, false))
+	sub := subscription.NewSubscription("sub-test", "sub-test", "https://example.com/sub", true, false)
+	cp.SubMgr.Register(sub)
 
 	raw := []byte(`{"type":"ss","server":"1.1.1.1","port":443}`)
 	hash := node.HashFromRawOptions(raw)
 	cp.Pool.AddNodeFromSub(hash, raw, "sub-test")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"seed"}})
 
 	entry, ok := cp.Pool.GetEntry(hash)
 	if !ok {

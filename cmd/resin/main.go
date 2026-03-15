@@ -330,6 +330,11 @@ func newTopologyRuntime(
 		SubManager: subManager,
 		Pool:       pool,
 		Downloader: downloader,
+		OnSubReenabledNode: func(hash node.Hash) {
+			outboundMgr.EnsureNodeOutbound(hash)
+			probeMgr.TriggerImmediateEgressProbe(hash)
+			probeMgr.TriggerImmediateLatencyProbe(hash)
+		},
 	})
 	ephemeralCleaner := topology.NewEphemeralCleaner(
 		subManager,
@@ -602,8 +607,9 @@ func (a *runtimeStatsAdapter) TotalNodes() int { return a.pool.Size() }
 
 func (a *runtimeStatsAdapter) HealthyNodes() int {
 	count := 0
+	isHealthyAndEnabled := a.pool.MakeHealthyAndEnabledEvaluator()
 	a.pool.RangeNodes(func(_ node.Hash, entry *node.NodeEntry) bool {
-		if entry.IsHealthy() {
+		if isHealthyAndEnabled(entry) {
 			count++
 		}
 		return true
@@ -624,8 +630,9 @@ func (a *runtimeStatsAdapter) EgressIPCount() int {
 
 func (a *runtimeStatsAdapter) UniqueHealthyEgressIPCount() int {
 	seen := make(map[netip.Addr]struct{})
+	isHealthyAndEnabled := a.pool.MakeHealthyAndEnabledEvaluator()
 	a.pool.RangeNodes(func(_ node.Hash, entry *node.NodeEntry) bool {
-		if !entry.IsHealthy() {
+		if !isHealthyAndEnabled(entry) {
 			return true
 		}
 		if ip := entry.GetEgressIP(); ip.IsValid() {

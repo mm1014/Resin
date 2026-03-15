@@ -23,8 +23,8 @@ import type { NodeSummary } from "./types";
 import { getAllRegions, getRegionName } from "./regions";
 import type { NodeListFilters, NodeSortBy, SortOrder } from "./types";
 
-type NodeStatusFilter = "all" | "healthy" | "circuit_open" | "error";
-type NodeDisplayStatus = "healthy" | "circuit_open" | "pending_test" | "error";
+type NodeStatusFilter = "all" | "healthy" | "circuit_open" | "error" | "disabled";
+type NodeDisplayStatus = "healthy" | "circuit_open" | "pending_test" | "error" | "disabled";
 
 type NodeFilterDraft = {
   platform_id: string;
@@ -83,7 +83,7 @@ function parseStatusParam(value: string | null): NodeStatusFilter | undefined {
   }
 
   const normalized = value.trim().toLowerCase();
-  if (normalized === "all" || normalized === "healthy" || normalized === "circuit_open" || normalized === "error") {
+  if (normalized === "all" || normalized === "healthy" || normalized === "circuit_open" || normalized === "error" || normalized === "disabled") {
     return normalized;
   }
 
@@ -98,6 +98,11 @@ function statusFromQuery(params: URLSearchParams): NodeStatusFilter {
 
   const hasOutbound = parseBoolParam(params.get("has_outbound"));
   const circuitOpen = parseBoolParam(params.get("circuit_open"));
+  const enabled = parseBoolParam(params.get("enabled"));
+
+  if (enabled === false) {
+    return "disabled";
+  }
 
   if (hasOutbound === false) {
     return "error";
@@ -135,18 +140,25 @@ function draftFromQuery(search: string): NodeFilterDraft {
 function draftToActiveFilters(draft: NodeFilterDraft): NodeListFilters {
   let circuit_open: boolean | undefined = undefined;
   let has_outbound: boolean | undefined = undefined;
+  let enabled: boolean | undefined = undefined;
 
   switch (draft.status) {
     case "healthy":
+      enabled = true;
       has_outbound = true;
       circuit_open = false;
       break;
     case "circuit_open":
+      enabled = true;
       has_outbound = true;
       circuit_open = true;
       break;
     case "error":
+      enabled = true;
       has_outbound = false;
+      break;
+    case "disabled":
+      enabled = false;
       break;
     case "all":
     default:
@@ -159,12 +171,16 @@ function draftToActiveFilters(draft: NodeFilterDraft): NodeListFilters {
     tag_keyword: draft.tag_keyword,
     region: draft.region,
     egress_ip: draft.egress_ip,
+    enabled,
     circuit_open,
     has_outbound,
   };
 }
 
-function firstTag(node: { tags: { tag: string }[] }): string {
+function firstTag(node: { display_tag?: string; tags: { tag: string }[] }): string {
+  if (node.display_tag && node.display_tag.trim()) {
+    return node.display_tag;
+  }
   if (!node.tags.length) {
     return "-";
   }
@@ -180,6 +196,9 @@ function isPendingTestNode(node: NodeSummary): boolean {
 }
 
 function getNodeDisplayStatus(node: NodeSummary): NodeDisplayStatus {
+  if (!node.enabled) {
+    return "disabled";
+  }
   if (!node.has_outbound) {
     return "error";
   }
@@ -513,6 +532,7 @@ export function NodesPage() {
       cell: (info) => {
         const node = info.row.original;
         const status = getNodeDisplayStatus(node);
+        if (status === "disabled") return <Badge variant="neutral">{t("禁用")}</Badge>;
         if (status === "error") return <Badge variant="danger">{t("错误")}</Badge>;
         if (status === "pending_test") return <Badge variant="muted">{t("待测")}</Badge>;
         if (status === "circuit_open") return <Badge variant="warning">{t("熔断")}</Badge>;
@@ -696,6 +716,7 @@ export function NodesPage() {
                 <option value="healthy">{t("健康")}</option>
                 <option value="circuit_open">{t("熔断 / 待测")}</option>
                 <option value="error">{t("错误")}</option>
+                <option value="disabled">{t("禁用")}</option>
               </Select>
             </div>
 
@@ -801,6 +822,8 @@ export function NodesPage() {
                           <div style={{ display: "flex", alignItems: "baseline", gap: "4px", flexWrap: "wrap" }}>
                             {status === "error" ? (
                               <Badge variant="danger">{t("错误")}</Badge>
+                            ) : status === "disabled" ? (
+                              <Badge variant="neutral">{t("禁用")}</Badge>
                             ) : status === "pending_test" ? (
                               <Badge variant="muted">{t("待测")}</Badge>
                             ) : status === "circuit_open" ? (

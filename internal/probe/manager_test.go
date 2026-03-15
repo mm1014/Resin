@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/Resinat/Resin/internal/topology"
 )
@@ -369,6 +370,170 @@ func TestTriggerImmediateEgressProbe_WithFetcher(t *testing.T) {
 	got := entry.GetEgressIP()
 	if got != netip.MustParseAddr("198.51.100.1") {
 		t.Fatalf("egress IP: got %v, want 198.51.100.1", got)
+	}
+}
+
+func TestTriggerImmediateLatencyProbe_WithFetcher(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", true, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"trigger-latency"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"trigger-latency"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var called sync.WaitGroup
+	called.Add(1)
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:        pool,
+		Concurrency: 1,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			defer called.Done()
+			return []byte("ok"), 25 * time.Millisecond, nil
+		},
+	})
+	mgr.Start()
+	defer mgr.Stop()
+
+	mgr.TriggerImmediateLatencyProbe(hash)
+	called.Wait()
+	time.Sleep(20 * time.Millisecond)
+
+	if !entry.HasLatency() {
+		t.Fatal("expected latency data after immediate latency probe")
+	}
+}
+
+func TestScanEgress_SkipsDisabledNodes(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", false, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"scan-egress-disabled"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"scan-egress-disabled"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var calls atomic.Int32
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			calls.Add(1)
+			return []byte("ip=198.51.100.1"), 10 * time.Millisecond, nil
+		},
+	})
+
+	mgr.scanEgress()
+	time.Sleep(30 * time.Millisecond)
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("disabled node should be skipped by scanEgress, calls=%d", got)
+	}
+}
+
+func TestScanLatency_SkipsDisabledNodes(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", false, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"scan-latency-disabled"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"scan-latency-disabled"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var calls atomic.Int32
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			calls.Add(1)
+			return []byte("ok"), 15 * time.Millisecond, nil
+		},
+	})
+
+	mgr.scanLatency()
+	time.Sleep(30 * time.Millisecond)
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("disabled node should be skipped by scanLatency, calls=%d", got)
+	}
+}
+
+func TestQueuedAsyncProbe_SkipsNodeDisabledBeforeExecution(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	sub := subscription.NewSubscription("sub1", "sub1", "url", true, false)
+	subMgr.Register(sub)
+
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+
+	hash := node.HashFromRawOptions([]byte(`{"type":"queued-disabled-before-execution"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"queued-disabled-before-execution"}`), "sub1")
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var calls atomic.Int32
+	mgr := NewProbeManager(ProbeConfig{
+		Pool:        pool,
+		Concurrency: 1,
+		Fetcher: func(_ node.Hash, _ string) ([]byte, time.Duration, error) {
+			calls.Add(1)
+			return []byte("ip=198.51.100.1"), 10 * time.Millisecond, nil
+		},
+	})
+	defer mgr.Stop()
+
+	if ok := mgr.enqueueProbe(hash, probeTaskKindEgress, probePriorityNormal); !ok {
+		t.Fatal("enqueue should succeed")
+	}
+
+	sub.SetEnabled(false)
+	mgr.Start()
+	time.Sleep(50 * time.Millisecond)
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("expected disabled queued node to be skipped, calls=%d", got)
 	}
 }
 
