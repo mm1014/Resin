@@ -19,15 +19,6 @@ func TestPumpPreparedTunnelReader_FallsBackToFullCloseWhenHalfCloseUnavailable(t
 	}
 	upstreamConn := newTLSLatencyConn(newCountingConn(upstreamBase, newCountingConnTestSink()), nil)
 
-	lifecycle := newRequestLifecycleFromMetadata(
-		NoOpEventEmitter{},
-		"127.0.0.1:12345",
-		"",
-		ProxyTypeSocks5Forward,
-		true,
-		false,
-	)
-
 	clientPayloadDone := make(chan []byte, 1)
 	go func() {
 		data, _ := io.ReadAll(clientPeer)
@@ -36,14 +27,13 @@ func TestPumpPreparedTunnelReader_FallsBackToFullCloseWhenHalfCloseUnavailable(t
 
 	done := make(chan struct{})
 	go func() {
-		pumpPreparedTunnelReader(
+		_ = pumpPreparedTunnelReader(
 			clientConn,
 			clientConn,
 			&preparedTunnel{
 				upstreamConn: upstreamConn,
 				recordResult: func(bool) {},
 			},
-			lifecycle,
 			tunnelPumpOptions{},
 		)
 		close(done)

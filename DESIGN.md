@@ -68,7 +68,7 @@
    * 仅支持 SOCKS5 `CONNECT`；成功后进入原始双向 TCP 隧道。
    * `RESIN_PROXY_TOKEN` 非空时，仅接受 RFC1929 用户名密码认证（method `0x02`）：`username=<Platform.Account|Platform:Account>`，`password=<PROXY_TOKEN>`。
    * `RESIN_PROXY_TOKEN` 为空时，允许 `NO AUTH (0x00)`；若客户端同时提供 RFC1929 用户名密码认证，服务端优先选择该方法以提取 `Platform/Account` 身份，此时密码不做校验。
-   * 为兼容少量 optimistic early data，服务端在 `CONNECT` 成功回复前最多缓存 `64 KiB` 客户端负载；若客户端在成功回复前继续发送并超过该上限，则当前会话立即失败并返回 `GENERAL FAILURE`，且不计入节点健康失败。正式集成仍要求客户端在收到成功回复后再发送业务负载。
+   * 不支持 optimistic early data。客户端必须在收到 SOCKS5 success reply（`REP=0x00`）后再发送业务负载；若服务端在 success reply 前观察到业务负载，会立即终止当前会话并返回 `GENERAL FAILURE`，且不计入节点健康失败。
 6. 反向代理：
    * `V1` 路径：`/PROXY_TOKEN/Platform.Account/protocol/host/path?query`；身份段按第一个出现的 `.` 或 `:` 切分。
    * `LEGACY_V0` 路径：`/PROXY_TOKEN/Platform:Account/protocol/host/path?query`；身份段按第一个 `:` 切分。
@@ -197,7 +197,7 @@ SOCKS5 正向代理仅在 `RESIN_AUTH_VERSION=V1` 时启用，且只支持 SOCKS
 | RFC1929 用户名密码认证失败 | 用户名密码子协商回复 `0x01 0x01` | `RESIN_PROXY_TOKEN` 非空时密码必须等于 `PROXY_TOKEN`。 |
 | 命令不是 `CONNECT` | SOCKS5 reply `REP=0x07` | 当前实现不支持 `BIND` / `UDP ASSOCIATE`。 |
 | 地址类型不支持 | SOCKS5 reply `REP=0x08` | 当前仅支持 IPv4 / IPv6 / 域名三类标准地址。 |
-| `CONNECT` 成功回复前客户端发送的提前数据超过 `64 KiB` | SOCKS5 reply `REP=0x01` | 当前实现仅容忍有限的 optimistic early data；超限时取消当前拨号并终止会话。该场景视为客户端协议越界，不触发节点健康失败。 |
+| `CONNECT` success reply 前客户端发送业务负载 | SOCKS5 reply `REP=0x01` | 当前实现不支持 optimistic early data；该场景视为客户端协议越界，不触发节点健康失败。 |
 | 路由失败、无可用节点、拨号失败、超时、向客户端写入成功回复失败 | SOCKS5 reply `REP=0x01` | 协议面统一暴露为 `GENERAL FAILURE`；更细粒度的 `resin_error` / `upstream_stage` 仅记录在请求日志中。 |
 | 成功建立隧道 | SOCKS5 reply `REP=0x00` | 回复成功后进入原始双向 TCP 隧道。 |
 

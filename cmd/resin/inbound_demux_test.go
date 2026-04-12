@@ -82,11 +82,9 @@ func (l *temporaryErrorListener) Accept() (net.Conn, error) {
 	return l.Listener.Accept()
 }
 
-func (h *stubSocksHandler) ServeConnContext(_ context.Context, conn net.Conn, reader *bufio.Reader) {
+func (h *stubSocksHandler) ServeConnContext(_ context.Context, conn net.Conn) {
 	defer conn.Close()
-	if reader == nil {
-		return
-	}
+	reader := bufio.NewReader(conn)
 	b, err := reader.ReadByte()
 	if err != nil {
 		return
@@ -505,6 +503,75 @@ func TestInboundDemux_ShutdownTimeoutForceClosesActiveHTTPConnections(t *testing
 	}
 
 	waitForDemuxConnState(t, demux, 0, 0)
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("serve error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for demux server to stop")
+	}
+}
+
+func TestInboundDemux_ShutdownTimeoutForceClosesActiveHTTPConnection(t *testing.T) {
+	handlerStarted := make(chan struct{})
+	handlerDone := make(chan struct{})
+	httpServer := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(handlerStarted)
+			<-r.Context().Done()
+			close(handlerDone)
+		}),
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	demux := newInboundDemuxServer(httpServer, &stubSocksHandler{})
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- demux.Serve(ln)
+	}()
+
+	clientConn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial http conn: %v", err)
+	}
+	defer clientConn.Close()
+
+	if _, err := io.WriteString(clientConn, "GET /hang HTTP/1.1\r\nHost: test\r\n\r\n"); err != nil {
+		t.Fatalf("write http request: %v", err)
+	}
+
+	select {
+	case <-handlerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	waitForDemuxConnState(t, demux, 1, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err = demux.Shutdown(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("shutdown error: got %v, want context deadline exceeded", err)
+	}
+
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("active HTTP handler was not interrupted after forced shutdown")
+	}
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(time.Second))
+	buf := make([]byte, 1)
+	if _, err := clientConn.Read(buf); !errors.Is(err, io.EOF) {
+		t.Fatalf("active HTTP conn should be closed during forced shutdown, got %v", err)
+	}
 
 	select {
 	case err := <-errCh:

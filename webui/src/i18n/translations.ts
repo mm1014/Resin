@@ -250,6 +250,8 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "SOCKS5": "SOCKS5",
   "正向": "Forward",
   "反向": "Reverse",
+  "HTTP 正向代理": "HTTP Forward Proxy",
+  "HTTP 反向代理": "HTTP Reverse Proxy",
   "正向代理": "Forward Proxy",
   "反向代理": "Reverse Proxy",
   "SOCKS5 正向代理": "SOCKS5 Forward Proxy",

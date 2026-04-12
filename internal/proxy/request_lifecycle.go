@@ -16,8 +16,6 @@ type requestLifecycle struct {
 	finished  RequestFinishedEvent
 	log       RequestLogEntry
 
-	proxyErrorsSetHTTPStatus bool
-
 	reqBodyCapture  *payloadCaptureReadCloser
 	respBodyCapture *payloadCaptureReadCloser
 }
@@ -28,7 +26,6 @@ func newRequestLifecycleFromMetadata(
 	method string,
 	proxyType ProxyType,
 	isConnect bool,
-	proxyErrorsSetHTTPStatus bool,
 ) *requestLifecycle {
 	clientIP := ""
 	if host, _, err := net.SplitHostPort(clientRemoteAddr); err == nil {
@@ -38,9 +35,8 @@ func newRequestLifecycleFromMetadata(
 	}
 	now := time.Now()
 	return &requestLifecycle{
-		startedAt:                now,
-		events:                   events,
-		proxyErrorsSetHTTPStatus: proxyErrorsSetHTTPStatus,
+		startedAt: now,
+		events:    events,
 		finished: RequestFinishedEvent{
 			ProxyType: proxyType,
 			IsConnect: isConnect,
@@ -66,7 +62,7 @@ func newRequestLifecycle(
 		method = r.Method
 		clientRemoteAddr = r.RemoteAddr
 	}
-	return newRequestLifecycleFromMetadata(events, clientRemoteAddr, method, proxyType, isConnect, true)
+	return newRequestLifecycleFromMetadata(events, clientRemoteAddr, method, proxyType, isConnect)
 }
 
 func (l *requestLifecycle) finish() {
@@ -97,9 +93,6 @@ func (l *requestLifecycle) setProxyError(pe *ProxyError) {
 		return
 	}
 	l.log.ResinError = pe.ResinError
-	if l.proxyErrorsSetHTTPStatus && l.log.HTTPStatus == 0 {
-		l.log.HTTPStatus = pe.HTTPCode
-	}
 }
 
 func (l *requestLifecycle) setUpstreamError(stage string, err error) {

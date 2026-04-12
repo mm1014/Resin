@@ -394,11 +394,13 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 			health:      p.health,
 			metricsSink: p.metricsSink,
 		},
-		lifecycle,
 		platName,
 		account,
 		target,
 	)
+	if prepare.route.PlatformID != "" {
+		lifecycle.setRouteResult(prepare.route)
+	}
 	if prepare.session == nil {
 		if prepare.proxyErr != nil {
 			lifecycle.setProxyError(prepare.proxyErr)
@@ -407,6 +409,8 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 			}
 			lifecycle.setHTTPStatus(prepare.proxyErr.HTTPCode)
 			writeProxyError(w, prepare.proxyErr)
+		} else if prepare.canceled {
+			lifecycle.setNetOK(true)
 		}
 		return
 	}
@@ -436,19 +440,31 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	if _, err := clientBuf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		prepare.session.upstreamConn.Close()
 		clientConn.Close()
+		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_client_response_write", err)
+		lifecycle.setNetOK(false)
 		return
 	}
 	if err := clientBuf.Flush(); err != nil {
 		prepare.session.upstreamConn.Close()
 		clientConn.Close()
+		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_client_response_flush", err)
+		lifecycle.setNetOK(false)
 		return
 	}
 	lifecycle.setHTTPStatus(http.StatusOK)
-	pumpPreparedTunnel(clientConn, clientBuf.Reader, prepare.session, lifecycle, tunnelPumpOptions{
+	relay := pumpPreparedTunnel(clientConn, clientBuf.Reader, prepare.session, tunnelPumpOptions{
 		requireBidirectionalTraffic: true,
 	})
+	lifecycle.addIngressBytes(relay.ingressBytes)
+	lifecycle.addEgressBytes(relay.egressBytes)
+	if relay.proxyErr != nil {
+		lifecycle.setProxyError(relay.proxyErr)
+		lifecycle.setUpstreamError(relay.upstreamStage, relay.upstreamErr)
+	}
+	lifecycle.setNetOK(relay.netOK)
+	prepare.session.recordResult(relay.netOK)
 }
 
 // shouldRecordForwardCopyFailure decides whether an HTTP response body copy

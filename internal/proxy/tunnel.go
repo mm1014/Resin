@@ -28,7 +28,18 @@ type preparedTunnel struct {
 }
 
 type tunnelPrepareResult struct {
+	route         routing.RouteResult
 	session       *preparedTunnel
+	proxyErr      *ProxyError
+	upstreamStage string
+	upstreamErr   error
+	canceled      bool
+}
+
+type tunnelRelayResult struct {
+	ingressBytes  int64
+	egressBytes   int64
+	netOK         bool
 	proxyErr      *ProxyError
 	upstreamStage string
 	upstreamErr   error
@@ -41,7 +52,6 @@ type tunnelPumpOptions struct {
 func prepareConnectTunnel(
 	ctx context.Context,
 	deps tunnelDeps,
-	lifecycle *requestLifecycle,
 	platformName string,
 	account string,
 	target string,
@@ -49,9 +59,6 @@ func prepareConnectTunnel(
 	routed, routeErr := resolveRoutedOutbound(deps.router, deps.pool, platformName, account, target)
 	if routeErr != nil {
 		return tunnelPrepareResult{proxyErr: routeErr}
-	}
-	if lifecycle != nil {
-		lifecycle.setRouteResult(routed.Route)
 	}
 
 	domain := netutil.ExtractDomain(target)
@@ -64,28 +71,23 @@ func prepareConnectTunnel(
 	if err != nil {
 		proxyErr := classifyConnectError(err)
 		if proxyErr == nil {
-			if lifecycle != nil {
-				lifecycle.setNetOK(true)
+			return tunnelPrepareResult{
+				route:    routed.Route,
+				canceled: true,
 			}
-			return tunnelPrepareResult{}
 		}
 		if deps.health != nil {
 			go deps.health.RecordResult(nodeHashRaw, false)
 		}
 		return tunnelPrepareResult{
+			route:         routed.Route,
 			proxyErr:      proxyErr,
 			upstreamStage: "connect_dial",
 			upstreamErr:   err,
 		}
 	}
-	if lifecycle != nil {
-		lifecycle.setNetOK(true)
-	}
 
 	recordResult := func(ok bool) {
-		if lifecycle != nil {
-			lifecycle.setNetOK(ok)
-		}
 		if deps.health != nil {
 			go deps.health.RecordResult(nodeHashRaw, ok)
 		}
@@ -104,6 +106,7 @@ func prepareConnectTunnel(
 	})
 
 	return tunnelPrepareResult{
+		route: routed.Route,
 		session: &preparedTunnel{
 			upstreamConn: upstreamConn,
 			recordResult: recordResult,
@@ -115,30 +118,33 @@ func pumpPreparedTunnel(
 	clientConn net.Conn,
 	clientReader *bufio.Reader,
 	session *preparedTunnel,
-	lifecycle *requestLifecycle,
 	opts tunnelPumpOptions,
-) {
+) tunnelRelayResult {
 	clientToUpstream, err := makeTunnelClientReader(clientConn, clientReader)
 	if err != nil {
-		session.upstreamConn.Close()
-		clientConn.Close()
-		lifecycle.setProxyError(ErrUpstreamRequestFailed)
-		lifecycle.setUpstreamError("connect_client_prefetch_drain", err)
-		session.recordResult(false)
-		return
+		if session != nil && session.upstreamConn != nil {
+			_ = session.upstreamConn.Close()
+		}
+		if clientConn != nil {
+			_ = clientConn.Close()
+		}
+		return tunnelRelayResult{
+			proxyErr:      ErrUpstreamRequestFailed,
+			upstreamStage: "connect_client_prefetch_drain",
+			upstreamErr:   err,
+		}
 	}
-	pumpPreparedTunnelReader(clientConn, clientToUpstream, session, lifecycle, opts)
+	return pumpPreparedTunnelReader(clientConn, clientToUpstream, session, opts)
 }
 
 func pumpPreparedTunnelReader(
 	clientConn net.Conn,
 	clientToUpstream io.Reader,
 	session *preparedTunnel,
-	lifecycle *requestLifecycle,
 	opts tunnelPumpOptions,
-) {
-	if clientConn == nil || clientToUpstream == nil || session == nil || session.upstreamConn == nil || lifecycle == nil {
-		return
+) tunnelRelayResult {
+	if clientConn == nil || clientToUpstream == nil || session == nil || session.upstreamConn == nil {
+		return tunnelRelayResult{}
 	}
 
 	type copyResult struct {
@@ -172,32 +178,36 @@ func pumpPreparedTunnelReader(
 	ingressResult := <-ingressBytesCh
 	egressResult := <-egressBytesCh
 	closeBoth()
-	lifecycle.addIngressBytes(ingressResult.n)
-	lifecycle.addEgressBytes(egressResult.n)
 
-	okResult := true
+	result := tunnelRelayResult{
+		ingressBytes: ingressResult.n,
+		egressBytes:  egressResult.n,
+		netOK:        true,
+	}
 	switch {
 	case !isBenignTunnelCopyError(ingressResult.err):
-		okResult = false
-		lifecycle.setProxyError(ErrUpstreamRequestFailed)
-		lifecycle.setUpstreamError("connect_upstream_to_client_copy", ingressResult.err)
+		result.netOK = false
+		result.proxyErr = ErrUpstreamRequestFailed
+		result.upstreamStage = "connect_upstream_to_client_copy"
+		result.upstreamErr = ingressResult.err
 	case !isBenignTunnelCopyError(egressResult.err):
-		okResult = false
-		lifecycle.setProxyError(ErrUpstreamRequestFailed)
-		lifecycle.setUpstreamError("connect_client_to_upstream_copy", egressResult.err)
+		result.netOK = false
+		result.proxyErr = ErrUpstreamRequestFailed
+		result.upstreamStage = "connect_client_to_upstream_copy"
+		result.upstreamErr = egressResult.err
 	case opts.requireBidirectionalTraffic && (ingressResult.n == 0 || egressResult.n == 0):
-		okResult = false
-		lifecycle.setProxyError(ErrUpstreamRequestFailed)
+		result.netOK = false
+		result.proxyErr = ErrUpstreamRequestFailed
 		switch {
 		case ingressResult.n == 0 && egressResult.n == 0:
-			lifecycle.setUpstreamError("connect_zero_traffic", nil)
+			result.upstreamStage = "connect_zero_traffic"
 		case ingressResult.n == 0:
-			lifecycle.setUpstreamError("connect_no_ingress_traffic", nil)
+			result.upstreamStage = "connect_no_ingress_traffic"
 		default:
-			lifecycle.setUpstreamError("connect_no_egress_traffic", nil)
+			result.upstreamStage = "connect_no_egress_traffic"
 		}
 	}
-	session.recordResult(okResult)
+	return result
 }
 
 func closeWriteConn(conn net.Conn) bool {

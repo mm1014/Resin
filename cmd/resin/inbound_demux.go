@@ -15,7 +15,7 @@ import (
 var errHalfCloseUnsupported = errors.New("half-close unsupported")
 
 type inboundConnHandler interface {
-	ServeConnContext(context.Context, net.Conn, *bufio.Reader)
+	ServeConnContext(context.Context, net.Conn)
 }
 
 const inboundDemuxSniffTimeout = 15 * time.Second
@@ -126,7 +126,11 @@ func (s *inboundDemuxServer) Shutdown(ctx context.Context) error {
 	if s.httpServer != nil {
 		if err := s.httpServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			httpErr = err
+			_ = s.httpServer.Close()
 		}
+	}
+	if ctx.Err() != nil {
+		s.closeActiveConns()
 	}
 
 	waitDone := make(chan struct{})
@@ -140,6 +144,9 @@ func (s *inboundDemuxServer) Shutdown(ctx context.Context) error {
 		return httpErr
 	case <-ctx.Done():
 		s.closeActiveConns()
+		if s.httpServer != nil {
+			_ = s.httpServer.Close()
+		}
 		<-waitDone
 		return httpErr
 	}
@@ -167,25 +174,25 @@ func (s *inboundDemuxServer) handleAcceptedConn(conn net.Conn) {
 	}
 	s.untrackSniffConn(conn)
 
-	if first[0] == 0x05 {
-		if s.socksHandler == nil {
-			s.untrackActiveConn(conn)
-			_ = conn.Close()
-			return
-		}
-		defer s.untrackActiveConn(conn)
-		s.socksHandler.ServeConnContext(s.baseContext(), conn, reader)
-		return
-	}
-
-	httpConn, err := newPrebufferedConn(conn, reader)
+	bufferedConn, err := newPrebufferedConn(conn, reader)
 	if err != nil {
 		s.untrackActiveConn(conn)
 		_ = conn.Close()
 		return
 	}
 
-	httpConn = newCloseHookConn(httpConn, func() {
+	if first[0] == 0x05 {
+		if s.socksHandler == nil {
+			s.untrackActiveConn(conn)
+			_ = bufferedConn.Close()
+			return
+		}
+		defer s.untrackActiveConn(conn)
+		s.socksHandler.ServeConnContext(s.baseContext(), bufferedConn)
+		return
+	}
+
+	httpConn := newCloseHookConn(bufferedConn, func() {
 		s.untrackActiveConn(conn)
 	})
 	if err := s.httpListener.Enqueue(httpConn); err != nil {

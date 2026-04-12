@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
@@ -33,9 +32,9 @@ const (
 	socks5UserPassStatusSuccess   = 0x00
 	socks5UserPassStatusFailure   = 0x01
 	socks5PreparePollInterval     = 250 * time.Millisecond
-	socks5PrepareReadChunkSize    = 4 * 1024
-	socks5PreparePrefetchLimit    = 64 * 1024
 )
+
+var socks5HandshakeTimeout = 15 * time.Second
 
 // Socks5InboundConfig holds dependencies for the SOCKS5 inbound handler.
 type Socks5InboundConfig struct {
@@ -87,21 +86,24 @@ func NewSocks5Inbound(cfg Socks5InboundConfig) *Socks5Inbound {
 }
 
 // ServeConn handles a SOCKS5 session on an already-accepted TCP connection.
-func (s *Socks5Inbound) ServeConn(conn net.Conn, reader *bufio.Reader) {
-	s.ServeConnContext(context.Background(), conn, reader)
+func (s *Socks5Inbound) ServeConn(conn net.Conn) {
+	s.ServeConnContext(context.Background(), conn)
 }
 
 // ServeConnContext handles a SOCKS5 session with a caller-provided base context.
-func (s *Socks5Inbound) ServeConnContext(baseCtx context.Context, conn net.Conn, reader *bufio.Reader) {
+func (s *Socks5Inbound) ServeConnContext(baseCtx context.Context, conn net.Conn) {
 	if conn == nil {
 		return
 	}
 	defer conn.Close()
-	if reader == nil {
-		reader = bufio.NewReader(conn)
+	if baseCtx == nil {
+		baseCtx = context.Background()
 	}
+	reader := bufio.NewReader(conn)
 
-	handshakePhase := startSocks5HandshakePhase(baseCtx, conn)
+	handshakeCtx, cancelHandshake := context.WithTimeout(baseCtx, socks5HandshakeTimeout)
+	defer cancelHandshake()
+	handshakePhase := startSocks5HandshakePhase(handshakeCtx, conn)
 	defer handshakePhase.Stop()
 
 	handshake := s.performHandshake(conn, reader)
@@ -116,54 +118,72 @@ func (s *Socks5Inbound) ServeConnContext(baseCtx context.Context, conn net.Conn,
 		"",
 		ProxyTypeSocks5Forward,
 		true,
-		false,
 	)
 	lifecycle.setTarget(handshake.target, "")
 	lifecycle.setAccount(handshake.account)
 	defer lifecycle.finish()
 
-	prepareMonitor, err := startSocks5PrepareMonitor(baseCtx, conn, reader)
-	if err != nil {
+	prepareGuard := startSocks5PrepareGuard(baseCtx, conn, reader)
+	if prepareGuard.EarlyDataDetected() {
+		prepareGuard.Stop()
+		lifecycle.setProxyError(ErrUpstreamRequestFailed)
+		lifecycle.setUpstreamError("socks5_early_data_unsupported", nil)
+		lifecycle.setNetOK(false)
+		_ = writeSocks5Reply(conn, socks5ReplyGeneralFailure, nil)
 		return
 	}
-	// The prepare monitor has drained any unread bytes it needs from reader.
-	// Drop the handshake reader reference so long-lived tunnels don't retain it.
-	reader = nil
 	prepare := prepareConnectTunnel(
-		prepareMonitor.Context(),
+		prepareGuard.Context(),
 		s.tunnel,
-		lifecycle,
 		handshake.platformName,
 		handshake.account,
 		handshake.target,
 	)
-	prepareMonitor.Stop()
+	prepareGuard.Stop()
+	if prepare.route.PlatformID != "" {
+		lifecycle.setRouteResult(prepare.route)
+	}
+	if prepareGuard.EarlyDataDetected() {
+		if prepare.session != nil && prepare.session.upstreamConn != nil {
+			prepare.session.upstreamConn.Close()
+		}
+		lifecycle.setProxyError(ErrUpstreamRequestFailed)
+		lifecycle.setUpstreamError("socks5_early_data_unsupported", nil)
+		lifecycle.setNetOK(false)
+		_ = writeSocks5Reply(conn, socks5ReplyGeneralFailure, nil)
+		return
+	}
 	if prepare.session == nil {
 		if prepare.proxyErr != nil {
 			lifecycle.setProxyError(prepare.proxyErr)
 			if prepare.upstreamStage != "" {
 				lifecycle.setUpstreamError(prepare.upstreamStage, prepare.upstreamErr)
 			}
-			_ = writeSocks5Reply(conn, socks5ReplyGeneralFailure, nil)
-		} else if prepareMonitor.Overflowed() {
-			// We support only bounded optimistic early data before CONNECT success.
-			// Treat larger pre-connect payloads as a protocol failure without
-			// penalizing node health.
 			lifecycle.setNetOK(false)
-			lifecycle.setProxyError(ErrUpstreamRequestFailed)
-			lifecycle.setUpstreamError("socks5_client_early_data_overflow", nil)
 			_ = writeSocks5Reply(conn, socks5ReplyGeneralFailure, nil)
+		} else if prepare.canceled {
+			lifecycle.setNetOK(true)
 		}
 		return
 	}
 
 	if err := writeSocks5Reply(conn, socks5ReplySucceeded, prepare.session.upstreamConn.LocalAddr()); err != nil {
 		prepare.session.upstreamConn.Close()
+		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("socks5_connect_response_write", err)
+		lifecycle.setNetOK(false)
 		return
 	}
 
-	pumpPreparedTunnelReader(conn, prepareMonitor.ClientReader(), prepare.session, lifecycle, tunnelPumpOptions{})
+	relay := pumpPreparedTunnelReader(conn, conn, prepare.session, tunnelPumpOptions{})
+	lifecycle.addIngressBytes(relay.ingressBytes)
+	lifecycle.addEgressBytes(relay.egressBytes)
+	if relay.proxyErr != nil {
+		lifecycle.setProxyError(relay.proxyErr)
+		lifecycle.setUpstreamError(relay.upstreamStage, relay.upstreamErr)
+	}
+	lifecycle.setNetOK(relay.netOK)
+	prepare.session.recordResult(relay.netOK)
 }
 
 func (s *Socks5Inbound) performHandshake(conn net.Conn, reader *bufio.Reader) socks5HandshakeResult {
@@ -253,150 +273,103 @@ func (p *socks5HandshakePhase) Stop() {
 	})
 }
 
-type socks5PrepareMonitor struct {
+type socks5PrepareGuard struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	done     chan struct{}
 	stopOnce sync.Once
 	conn     net.Conn
-	prefetch []byte
-	overflow bool
+	reader   *bufio.Reader
+	early    bool
 }
 
-func startSocks5PrepareMonitor(baseCtx context.Context, conn net.Conn, reader *bufio.Reader) (*socks5PrepareMonitor, error) {
+func startSocks5PrepareGuard(baseCtx context.Context, conn net.Conn, reader *bufio.Reader) *socks5PrepareGuard {
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(baseCtx)
-
-	prefetch, err := drainBufferedReader(reader)
-	if err != nil {
+	g := &socks5PrepareGuard{
+		ctx:    ctx,
+		cancel: cancel,
+		done:   make(chan struct{}),
+		conn:   conn,
+		reader: reader,
+	}
+	if reader != nil && reader.Buffered() > 0 {
+		g.early = true
 		cancel()
-		return nil, err
+		close(g.done)
+		return g
 	}
-
-	m := &socks5PrepareMonitor{
-		ctx:      ctx,
-		cancel:   cancel,
-		done:     make(chan struct{}),
-		conn:     conn,
-		prefetch: prefetch,
+	if conn == nil || reader == nil {
+		close(g.done)
+		return g
 	}
-	if len(m.prefetch) > socks5PreparePrefetchLimit {
-		m.overflow = true
-		cancel()
-		close(m.done)
-		return m, nil
-	}
-	if conn == nil {
-		close(m.done)
-		return m, nil
-	}
-	go m.run()
-	return m, nil
+	go g.run()
+	return g
 }
 
-func drainBufferedReader(reader *bufio.Reader) ([]byte, error) {
-	if reader == nil || reader.Buffered() == 0 {
-		return nil, nil
-	}
-	prefetch := make([]byte, reader.Buffered())
-	if _, err := io.ReadFull(reader, prefetch); err != nil {
-		return nil, err
-	}
-	return prefetch, nil
-}
-
-func (m *socks5PrepareMonitor) run() {
-	defer close(m.done)
-	if m == nil || m.conn == nil {
-		return
-	}
-
-	scratch := make([]byte, socks5PrepareReadChunkSize)
+func (g *socks5PrepareGuard) run() {
+	defer close(g.done)
 	for {
-		if m.ctx.Err() != nil {
+		if g == nil || g.conn == nil || g.reader == nil || g.ctx.Err() != nil {
 			return
 		}
-		remaining := socks5PreparePrefetchLimit - len(m.prefetch)
-
-		if err := m.conn.SetReadDeadline(time.Now().Add(socks5PreparePollInterval)); err != nil {
-			m.cancel()
+		if err := g.conn.SetReadDeadline(time.Now().Add(socks5PreparePollInterval)); err != nil {
+			g.cancel()
 			return
 		}
-		readBuf := scratch
-		if remaining <= 0 {
-			readBuf = readBuf[:1]
-		} else if remaining < len(readBuf) {
-			readBuf = readBuf[:remaining]
-		}
-		n, err := m.conn.Read(readBuf)
-		_ = m.conn.SetReadDeadline(time.Time{})
+		_, err := g.reader.Peek(1)
+		_ = g.conn.SetReadDeadline(time.Time{})
 
-		if n > 0 {
-			if remaining <= 0 {
-				m.overflow = true
-				m.cancel()
-				return
-			}
-			m.prefetch = append(m.prefetch, readBuf[:n]...)
-		}
-		if m.ctx.Err() != nil {
+		if g.ctx.Err() != nil {
 			return
 		}
 		if err == nil {
-			continue
+			g.early = true
+			g.cancel()
+			return
 		}
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			continue
 		}
-		m.cancel()
+		g.cancel()
 		return
 	}
 }
 
-func (m *socks5PrepareMonitor) Context() context.Context {
-	if m == nil || m.ctx == nil {
+func (g *socks5PrepareGuard) Context() context.Context {
+	if g == nil || g.ctx == nil {
 		return context.Background()
 	}
-	return m.ctx
+	return g.ctx
 }
 
-func (m *socks5PrepareMonitor) Stop() {
-	if m == nil {
+func (g *socks5PrepareGuard) Stop() {
+	if g == nil {
 		return
 	}
-	m.stopOnce.Do(func() {
-		if m.cancel != nil {
-			m.cancel()
+	g.stopOnce.Do(func() {
+		if g.cancel != nil {
+			g.cancel()
 		}
-		if m.conn != nil {
-			_ = m.conn.SetReadDeadline(time.Now())
+		if g.conn != nil {
+			_ = g.conn.SetReadDeadline(time.Now())
 		}
-		if m.done != nil {
-			<-m.done
+		if g.done != nil {
+			<-g.done
 		}
-		if m.conn != nil {
-			_ = m.conn.SetReadDeadline(time.Time{})
+		if g.conn != nil {
+			_ = g.conn.SetReadDeadline(time.Time{})
 		}
 	})
 }
 
-func (m *socks5PrepareMonitor) ClientReader() io.Reader {
-	if m == nil || m.conn == nil {
-		return nil
-	}
-	if len(m.prefetch) == 0 {
-		return m.conn
-	}
-	return io.MultiReader(bytes.NewReader(m.prefetch), m.conn)
-}
-
-func (m *socks5PrepareMonitor) Overflowed() bool {
-	if m == nil {
+func (g *socks5PrepareGuard) EarlyDataDetected() bool {
+	if g == nil {
 		return false
 	}
-	return m.overflow
+	return g.early
 }
 
 func (s *Socks5Inbound) negotiateMethod(conn net.Conn, reader *bufio.Reader) (byte, bool) {

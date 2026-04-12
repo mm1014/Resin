@@ -276,10 +276,10 @@ function buildActiveFilters(draft: FilterDraft): Omit<RequestLogListFilters, "cu
 
 function proxyTypeLabel(proxyType: number): string {
   if (proxyType === 1) {
-    return "正向代理";
+    return "HTTP 正向代理";
   }
   if (proxyType === 2) {
-    return "反向代理";
+    return "HTTP 反向代理";
   }
   if (proxyType === 3) {
     return "SOCKS5 正向代理";
@@ -736,8 +736,8 @@ export function RequestLogsPage() {
                   style={{ width: "100%", padding: "4px 8px", fontSize: "0.875rem", minHeight: "32px", height: "32px" }}
                 >
                   <option value="all">{t("全部")}</option>
-                  <option value="1">{t("正向代理")}</option>
-                  <option value="2">{t("反向代理")}</option>
+                  <option value="1">{t("HTTP 正向代理")}</option>
+                  <option value="2">{t("HTTP 反向代理")}</option>
                   <option value="3">{t("SOCKS5 正向代理")}</option>
                 </Select>
               </div>
@@ -896,7 +896,7 @@ export function RequestLogsPage() {
                     <span>{t("代理类型")}</span>
                     <p>
                       {detailLog.proxy_type === 1 ? (
-                        <Badge variant="info">{t("正向")}</Badge>
+                        <Badge variant="info">{t("HTTP")}</Badge>
                       ) : detailLog.proxy_type === 2 ? (
                         <Badge variant="accent">{t("反向")}</Badge>
                       ) : detailLog.proxy_type === 3 ? (
