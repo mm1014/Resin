@@ -4,8 +4,6 @@ import { createColumnHelper } from "@tanstack/react-table";
 import { AlertTriangle, Sparkles } from "lucide-react";
 import { DataTable } from "../../../components/ui/DataTable";
 import { Button } from "../../../components/ui/Button";
-import { ToastContainer } from "../../../components/ui/Toast";
-import { useToast } from "../../../hooks/useToast";
 import { useI18n } from "../../../i18n";
 import { formatApiErrorMessage } from "../../../lib/error-message";
 import { formatDateTime } from "../../../lib/time";
@@ -17,6 +15,7 @@ type PlatformLeaseOpsPanelProps = {
   platform: Platform;
   onReset: () => Promise<unknown>;
   onDelete: () => Promise<unknown>;
+  showToast: (tone: "success" | "error", text: string) => void;
   resetPending: boolean;
   deletePending: boolean;
   deleteDisabled: boolean;
@@ -33,12 +32,12 @@ export function PlatformLeaseOpsPanel({
   platform,
   onReset,
   onDelete,
+  showToast,
   resetPending,
   deletePending,
   deleteDisabled,
 }: PlatformLeaseOpsPanelProps) {
   const { t } = useI18n();
-  const { toasts, showToast, dismissToast } = useToast();
   const queryClient = useQueryClient();
   const [editingLease, setEditingLease] = useState<PlatformLease | null>(null);
   const [draftEgressIP, setDraftEgressIP] = useState("");
@@ -58,6 +57,15 @@ export function PlatformLeaseOpsPanel({
       queryClient.invalidateQueries({ queryKey: ["platform-leases", platform.id] }),
       queryClient.invalidateQueries({ queryKey: ["platform-ip-load", platform.id] }),
     ]);
+  };
+
+  const invalidatePlatformMonitor = async () => {
+    await queryClient.invalidateQueries({
+      predicate: (query) => {
+        const key = query.queryKey;
+        return Array.isArray(key) && key[0] === "platform-monitor" && key.includes(platform.id);
+      },
+    });
   };
 
   const leasesQuery = useQuery({
@@ -80,63 +88,6 @@ export function PlatformLeaseOpsPanel({
       }),
     enabled: editingLease !== null,
   });
-
-  const col = useMemo(() => createColumnHelper<PlatformLease>(), []);
-  const leaseColumns = useMemo(
-    () => [
-      col.accessor("account", {
-        header: t("账号"),
-        cell: (info) => info.getValue() || "-",
-      }),
-      col.accessor("egress_ip", {
-        header: t("出口 IP"),
-        cell: (info) => info.getValue() || "-",
-      }),
-      col.display({
-        id: "node",
-        header: t("节点"),
-        cell: (info) => {
-          const lease = info.row.original;
-          return (
-            <div className="platform-lease-cell">
-              <span>{lease.node_tag || "-"}</span>
-              <small>{shortNodeHash(lease.node_hash)}</small>
-            </div>
-          );
-        },
-      }),
-      col.accessor("last_accessed", {
-        header: t("最近访问"),
-        cell: (info) => formatDateTime(info.getValue()),
-      }),
-      col.accessor("expiry", {
-        header: t("到期时间"),
-        cell: (info) => formatDateTime(info.getValue()),
-      }),
-      col.display({
-        id: "actions",
-        header: t("操作"),
-        cell: (info) => (
-          <div className="subscriptions-row-actions platform-lease-actions">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => openEditModal(info.row.original)}
-            >
-              {t("编辑")}
-            </Button>
-          </div>
-        ),
-      }),
-    ],
-    [col, t],
-  );
-
-  const leases = leasesQuery.data?.items ?? [];
-  const leaseTotal = leasesQuery.data?.total ?? leases.length;
-  const leaseListTruncated = leaseTotal > leases.length;
-  const candidateIPs = (ipLoadQuery.data?.items ?? []).map((entry) => entry.egress_ip);
 
   const assignMutation = useMutation({
     mutationFn: async () => {
@@ -178,6 +129,7 @@ export function PlatformLeaseOpsPanel({
 
       closeEditModal();
       await invalidateLeaseData();
+      await invalidatePlatformMonitor();
       showToast("success", t("平台 {{name}} 的所有租约已清除", { name: platform.name }));
     },
     onError: (error) => {
@@ -185,10 +137,66 @@ export function PlatformLeaseOpsPanel({
     },
   });
 
+  const destructiveActionPending = resetPending || clearLeasesMutation.isPending || deletePending;
+  const leases = leasesQuery.data?.items ?? [];
+  const leaseTotal = leasesQuery.data?.total ?? leases.length;
+  const leaseListTruncated = leaseTotal > leases.length;
+  const candidateIPs = (ipLoadQuery.data?.items ?? []).map((entry) => entry.egress_ip);
+  const col = useMemo(() => createColumnHelper<PlatformLease>(), []);
+  const leaseColumns = useMemo(
+    () => [
+      col.accessor("account", {
+        header: t("账号"),
+        cell: (info) => info.getValue() || "-",
+      }),
+      col.accessor("egress_ip", {
+        header: t("出口 IP"),
+        cell: (info) => info.getValue() || "-",
+      }),
+      col.display({
+        id: "node",
+        header: t("节点"),
+        cell: (info) => {
+          const lease = info.row.original;
+          return (
+            <div className="platform-lease-cell">
+              <span>{lease.node_tag || "-"}</span>
+              <small>{shortNodeHash(lease.node_hash)}</small>
+            </div>
+          );
+        },
+      }),
+      col.accessor("last_accessed", {
+        header: t("最近访问"),
+        cell: (info) => formatDateTime(info.getValue()),
+      }),
+      col.accessor("expiry", {
+        header: t("到期时间"),
+        cell: (info) => formatDateTime(info.getValue()),
+      }),
+      col.display({
+        id: "actions",
+        header: t("操作"),
+        cell: (info) => (
+          <div className="subscriptions-row-actions platform-lease-actions">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={destructiveActionPending}
+              onClick={() => openEditModal(info.row.original)}
+            >
+              {t("编辑")}
+            </Button>
+          </div>
+        ),
+      }),
+    ],
+    [col, destructiveActionPending, t],
+  );
+
   return (
     <>
-      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-
       <div className="platform-lease-ops-layout">
         <section className="platform-drawer-section">
           <div className="platform-drawer-section-head">
@@ -236,7 +244,7 @@ export function PlatformLeaseOpsPanel({
               <h5>{t("重置为默认配置")}</h5>
               <p className="platform-op-hint">{t("恢复默认设置，并覆盖当前修改。")}</p>
             </div>
-            <Button type="button" variant="secondary" onClick={() => void onReset()} disabled={resetPending}>
+            <Button type="button" variant="secondary" onClick={() => void onReset()} disabled={destructiveActionPending}>
               {resetPending ? t("重置中...") : t("重置为默认配置")}
             </Button>
           </div>
@@ -250,7 +258,7 @@ export function PlatformLeaseOpsPanel({
               type="button"
               variant="danger"
               onClick={() => void clearLeasesMutation.mutateAsync()}
-              disabled={clearLeasesMutation.isPending}
+              disabled={destructiveActionPending}
             >
               {clearLeasesMutation.isPending ? t("清除中...") : t("清除所有租约")}
             </Button>
@@ -261,7 +269,7 @@ export function PlatformLeaseOpsPanel({
               <h5>{t("删除平台")}</h5>
               <p className="platform-op-hint">{t("永久删除当前平台及其配置，操作不可撤销。")}</p>
             </div>
-            <Button type="button" variant="danger" onClick={() => void onDelete()} disabled={deleteDisabled || deletePending}>
+            <Button type="button" variant="danger" onClick={() => void onDelete()} disabled={deleteDisabled || destructiveActionPending}>
               {deletePending ? t("删除中...") : t("删除平台")}
             </Button>
           </div>
@@ -277,9 +285,9 @@ export function PlatformLeaseOpsPanel({
         isLeaseLoading={false}
         areCandidatesLoading={ipLoadQuery.isLoading}
         candidatesLoadFailed={ipLoadQuery.isError}
-        isSaving={assignMutation.isPending}
+        isSaving={assignMutation.isPending || destructiveActionPending}
         onClose={() => {
-          if (assignMutation.isPending) {
+          if (assignMutation.isPending || destructiveActionPending) {
             return;
           }
 

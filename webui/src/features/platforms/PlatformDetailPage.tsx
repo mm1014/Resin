@@ -439,6 +439,7 @@ export function PlatformDetailPage() {
                   platform={platform}
                   onReset={() => resetMutation.mutateAsync()}
                   onDelete={handleDelete}
+                  showToast={showToast}
                   resetPending={resetMutation.isPending}
                   deletePending={deleteMutation.isPending}
                   deleteDisabled={deleteDisabled}
