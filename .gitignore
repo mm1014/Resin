@@ -3,3 +3,6 @@ sing-box-reference
 .agents
 .devcontainer
 start-instance.sh
+.idea
+.env
+docker-compose.yml
