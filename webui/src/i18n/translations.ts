@@ -44,6 +44,7 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "重置中...": "Resetting...",
   "清除中...": "Clearing...",
   "清除所有租约": "Clear All Leases",
+  "保存": "Save",
   "重建路由池": "Rebuild Routing Pool",
   "重建中...": "Rebuilding...",
   "重置为默认配置": "Reset to Defaults",
@@ -217,6 +218,8 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "正在加载订阅数据...": "Loading subscription data...",
   "总览看板数据加载中...": "Dashboard is loading...",
   "平台监控数据加载中...": "Platform monitoring data is loading...",
+  "加载租约中...": "Loading leases...",
+  "加载候选出口中...": "Loading egress candidates...",
   "监控数据刷新中": "Refreshing monitoring data",
   "重置草稿": "Reset Draft",
   "恢复为默认值": "Reset to Default",
@@ -346,6 +349,14 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "调试": "Debug",
   "调整当前平台策略，并执行维护操作。":
     "Adjust current platform policies and perform maintenance operations.",
+  "编辑出口 IP": "Edit Egress IP",
+  "覆盖当前账号的出口租约，账号字段只读。":
+    "Overwrite the current account lease's egress IP. The account field is read-only.",
+  "请输入或选择出口 IP": "Enter or select an egress IP",
+  "当前值：{{ip}}": "Current value: {{ip}}",
+  "候选出口加载失败，保存时以后端校验为准":
+    "Failed to load candidate egress IPs. Saving will still rely on backend validation.",
+  "暂无可用候选出口": "No available egress candidates",
   "订阅列表": "Subscription list",
   "订阅配置": "Subscription configuration",
   "队列大小": "Queue size",

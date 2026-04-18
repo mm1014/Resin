@@ -2384,6 +2384,43 @@ a {
   padding: 18px;
 }
 
+.platform-lease-edit-modal {
+  width: min(520px, 100%);
+}
+
+.platform-lease-edit-description {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.platform-lease-edit-form {
+  margin-top: 16px;
+}
+
+.platform-lease-edit-current,
+.platform-lease-edit-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.platform-lease-edit-hint-error {
+  color: #ad3629;
+}
+
+.platform-lease-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .platform-lease-edit-actions .btn {
+    width: 100%;
+  }
+}
+
 .drawer-overlay {
   position: fixed;
   inset: 0;
