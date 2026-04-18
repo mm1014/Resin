@@ -1,5 +1,14 @@
 import { apiRequest } from "../../lib/api-client";
-import type { PageResponse, Platform, PlatformCreateInput, PlatformUpdateInput } from "./types";
+import type {
+  ListPlatformIPLoadInput,
+  ListPlatformLeasesInput,
+  PageResponse,
+  Platform,
+  PlatformCreateInput,
+  PlatformIPLoadEntry,
+  PlatformLease,
+  PlatformUpdateInput,
+} from "./types";
 
 const basePath = "/api/v1/platforms";
 
@@ -42,6 +51,13 @@ function normalizePlatformPage(raw: PageResponse<ApiPlatform>): PageResponse<Pla
     ...raw,
     items: raw.items.map(normalizePlatform),
   };
+}
+
+function appendQueryValue(query: URLSearchParams, key: string, value: string | number | boolean | undefined) {
+  if (value === undefined || value === "") {
+    return;
+  }
+  query.set(key, String(value));
 }
 
 export type ListPlatformsPageInput = {
@@ -109,5 +125,45 @@ export async function rebuildPlatform(id: string): Promise<void> {
 export async function clearAllPlatformLeases(id: string): Promise<void> {
   await apiRequest<void>(`${basePath}/${id}/leases`, {
     method: "DELETE",
+  });
+}
+
+export async function listPlatformLeases(
+  id: string,
+  input: ListPlatformLeasesInput = {},
+): Promise<PageResponse<PlatformLease>> {
+  const query = new URLSearchParams({
+    limit: String(input.limit ?? 1000),
+    offset: String(input.offset ?? 0),
+    sort_by: input.sort_by ?? "account",
+    sort_order: input.sort_order ?? "asc",
+  });
+
+  appendQueryValue(query, "account", input.account?.trim());
+  appendQueryValue(query, "fuzzy", input.fuzzy);
+
+  return apiRequest<PageResponse<PlatformLease>>(`${basePath}/${id}/leases?${query.toString()}`);
+}
+
+export async function listPlatformIPLoad(
+  id: string,
+  input: ListPlatformIPLoadInput = {},
+): Promise<PageResponse<PlatformIPLoadEntry>> {
+  const query = new URLSearchParams({
+    limit: String(input.limit ?? 1000),
+    offset: String(input.offset ?? 0),
+    sort_by: input.sort_by ?? "lease_count",
+    sort_order: input.sort_order ?? "desc",
+  });
+
+  return apiRequest<PageResponse<PlatformIPLoadEntry>>(`${basePath}/${id}/ip-load?${query.toString()}`);
+}
+
+export async function assignPlatformLeaseToEgressIP(id: string, account: string, egressIP: string): Promise<PlatformLease> {
+  return apiRequest<PlatformLease>(`${basePath}/${id}/leases/${encodeURIComponent(account)}/actions/assign`, {
+    method: "POST",
+    body: {
+      egress_ip: egressIP,
+    },
   });
 }
