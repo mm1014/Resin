@@ -182,6 +182,8 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "可路由节点数": "Routable Node Count",
   "请求成功率": "Request Success Rate",
   "活跃租约": "Active Leases",
+  "当前平台租约": "Current Platform Leases",
+  "当前平台还没有活跃租约": "This platform has no active leases yet",
   "活跃租约数": "Active Lease Count",
   "活跃租约趋势": "Active Lease Trend",
   "请求统计": "Request Stats",
@@ -349,6 +351,8 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "调试": "Debug",
   "调整当前平台策略，并执行维护操作。":
     "Adjust current platform policies and perform maintenance operations.",
+  "按账号查看当前租约，并为已有租约调整出口 IP。":
+    "Inspect current leases by account and adjust the egress IP for existing leases.",
   "编辑出口 IP": "Edit Egress IP",
   "覆盖当前账号的出口租约，账号字段只读。":
     "Overwrite the current account lease's egress IP. The account field is read-only.",
@@ -356,7 +360,12 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "当前值：{{ip}}": "Current value: {{ip}}",
   "候选出口加载失败，保存时以后端校验为准":
     "Failed to load candidate egress IPs. Saving will still rely on backend validation.",
+  "最近访问": "Last Accessed",
+  "到期时间": "Expiry Time",
+  "当前只展示前 {{count}} 条租约，请缩小范围后再操作。":
+    "Only the first {{count}} leases are shown right now. Narrow the scope before continuing.",
   "暂无可用候选出口": "No available egress candidates",
+  "租约不存在": "Lease does not exist",
   "订阅列表": "Subscription list",
   "订阅配置": "Subscription configuration",
   "队列大小": "Queue size",
@@ -612,6 +621,7 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "平台 {{name}} 已完成节点池重建": "Platform {{name}} node pool rebuilt",
   "平台 {{name}} 已重置为默认配置": "Platform {{name}} reset to defaults",
   "平台 {{name}} 的所有租约已清除": "All leases for platform {{name}} cleared",
+  "账号 {{account}} 已绑定到出口 IP {{ip}}": "Account {{account}} is now bound to egress IP {{ip}}",
   "请求日志详情 {{id}}": "Request log details {{id}}",
   "确认立即清理订阅 {{name}} 中的熔断或异常节点？":
     "Clean circuit-open or failed nodes in subscription {{name}} now?",

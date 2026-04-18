@@ -1,0 +1,293 @@
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createColumnHelper } from "@tanstack/react-table";
+import { AlertTriangle, Sparkles } from "lucide-react";
+import { DataTable } from "../../../components/ui/DataTable";
+import { Button } from "../../../components/ui/Button";
+import { ToastContainer } from "../../../components/ui/Toast";
+import { useToast } from "../../../hooks/useToast";
+import { useI18n } from "../../../i18n";
+import { formatApiErrorMessage } from "../../../lib/error-message";
+import { formatDateTime } from "../../../lib/time";
+import { assignPlatformLeaseToEgressIP, clearAllPlatformLeases, listPlatformIPLoad, listPlatformLeases } from "../api";
+import type { Platform, PlatformLease } from "../types";
+import { PlatformLeaseEditModal } from "./PlatformLeaseEditModal";
+
+type PlatformLeaseOpsPanelProps = {
+  platform: Platform;
+  onReset: () => Promise<unknown>;
+  onDelete: () => Promise<unknown>;
+  resetPending: boolean;
+  deletePending: boolean;
+  deleteDisabled: boolean;
+};
+
+const LEASE_FETCH_LIMIT = 1000;
+const IP_LOAD_FETCH_LIMIT = 1000;
+
+function shortNodeHash(nodeHash: string): string {
+  return nodeHash ? nodeHash.slice(0, 12) : "-";
+}
+
+export function PlatformLeaseOpsPanel({
+  platform,
+  onReset,
+  onDelete,
+  resetPending,
+  deletePending,
+  deleteDisabled,
+}: PlatformLeaseOpsPanelProps) {
+  const { t } = useI18n();
+  const { toasts, showToast, dismissToast } = useToast();
+  const queryClient = useQueryClient();
+  const [editingLease, setEditingLease] = useState<PlatformLease | null>(null);
+  const [draftEgressIP, setDraftEgressIP] = useState("");
+
+  const openEditModal = (lease: PlatformLease) => {
+    setEditingLease(lease);
+    setDraftEgressIP(lease.egress_ip ?? "");
+  };
+
+  const closeEditModal = () => {
+    setEditingLease(null);
+    setDraftEgressIP("");
+  };
+
+  const invalidateLeaseData = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["platform-leases", platform.id] }),
+      queryClient.invalidateQueries({ queryKey: ["platform-ip-load", platform.id] }),
+    ]);
+  };
+
+  const leasesQuery = useQuery({
+    queryKey: ["platform-leases", platform.id, LEASE_FETCH_LIMIT],
+    queryFn: () =>
+      listPlatformLeases(platform.id, {
+        limit: LEASE_FETCH_LIMIT,
+        sort_by: "account",
+        sort_order: "asc",
+      }),
+  });
+
+  const ipLoadQuery = useQuery({
+    queryKey: ["platform-ip-load", platform.id, IP_LOAD_FETCH_LIMIT],
+    queryFn: () =>
+      listPlatformIPLoad(platform.id, {
+        limit: IP_LOAD_FETCH_LIMIT,
+        sort_by: "lease_count",
+        sort_order: "desc",
+      }),
+    enabled: editingLease !== null,
+  });
+
+  const col = useMemo(() => createColumnHelper<PlatformLease>(), []);
+  const leaseColumns = useMemo(
+    () => [
+      col.accessor("account", {
+        header: t("账号"),
+        cell: (info) => info.getValue() || "-",
+      }),
+      col.accessor("egress_ip", {
+        header: t("出口 IP"),
+        cell: (info) => info.getValue() || "-",
+      }),
+      col.display({
+        id: "node",
+        header: t("节点"),
+        cell: (info) => {
+          const lease = info.row.original;
+          return (
+            <div className="platform-lease-cell">
+              <span>{lease.node_tag || "-"}</span>
+              <small>{shortNodeHash(lease.node_hash)}</small>
+            </div>
+          );
+        },
+      }),
+      col.accessor("last_accessed", {
+        header: t("最近访问"),
+        cell: (info) => formatDateTime(info.getValue()),
+      }),
+      col.accessor("expiry", {
+        header: t("到期时间"),
+        cell: (info) => formatDateTime(info.getValue()),
+      }),
+      col.display({
+        id: "actions",
+        header: t("操作"),
+        cell: (info) => (
+          <div className="subscriptions-row-actions platform-lease-actions">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => openEditModal(info.row.original)}
+            >
+              {t("编辑")}
+            </Button>
+          </div>
+        ),
+      }),
+    ],
+    [col, t],
+  );
+
+  const leases = leasesQuery.data?.items ?? [];
+  const leaseTotal = leasesQuery.data?.total ?? leases.length;
+  const leaseListTruncated = leaseTotal > leases.length;
+  const candidateIPs = (ipLoadQuery.data?.items ?? []).map((entry) => entry.egress_ip);
+
+  const assignMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingLease) {
+        throw new Error(t("租约不存在"));
+      }
+
+      const nextIP = draftEgressIP.trim();
+      if (!nextIP) {
+        throw new Error(t("{{field}} 不能为空", { field: t("出口 IP") }));
+      }
+
+      return assignPlatformLeaseToEgressIP(platform.id, editingLease.account, nextIP);
+    },
+    onSuccess: async (lease) => {
+      await invalidateLeaseData();
+      closeEditModal();
+      showToast("success", t("账号 {{account}} 已绑定到出口 IP {{ip}}", { account: lease.account, ip: lease.egress_ip }));
+    },
+    onError: (error) => {
+      showToast("error", formatApiErrorMessage(error, t));
+    },
+  });
+
+  const clearLeasesMutation = useMutation({
+    mutationFn: async () => {
+      const confirmed = window.confirm(t("确认清除平台 {{name}} 的所有租约？", { name: platform.name }));
+      if (!confirmed) {
+        return false;
+      }
+
+      await clearAllPlatformLeases(platform.id);
+      return true;
+    },
+    onSuccess: async (didClear) => {
+      if (!didClear) {
+        return;
+      }
+
+      closeEditModal();
+      await invalidateLeaseData();
+      showToast("success", t("平台 {{name}} 的所有租约已清除", { name: platform.name }));
+    },
+    onError: (error) => {
+      showToast("error", formatApiErrorMessage(error, t));
+    },
+  });
+
+  return (
+    <>
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      <div className="platform-lease-ops-layout">
+        <section className="platform-drawer-section">
+          <div className="platform-drawer-section-head">
+            <h4>{t("当前平台租约")}</h4>
+            <p>{t("按账号查看当前租约，并为已有租约调整出口 IP。")}</p>
+          </div>
+
+          {leasesQuery.isLoading ? <p className="muted">{t("加载租约中...")}</p> : null}
+
+          {leasesQuery.isError ? (
+            <div className="callout callout-error">
+              <AlertTriangle size={14} />
+              <span>{formatApiErrorMessage(leasesQuery.error, t)}</span>
+            </div>
+          ) : null}
+
+          {leaseListTruncated ? (
+            <div className="callout callout-warning">
+              <span>{t("当前只展示前 {{count}} 条租约，请缩小范围后再操作。", { count: leases.length })}</span>
+            </div>
+          ) : null}
+
+          {!leasesQuery.isLoading && !leasesQuery.isError && !leases.length ? (
+            <div className="empty-box">
+              <Sparkles size={16} />
+              <p>{t("当前平台还没有活跃租约")}</p>
+            </div>
+          ) : null}
+
+          {leases.length ? (
+            <DataTable
+              data={leases}
+              columns={leaseColumns}
+              selectedRowId={editingLease?.account}
+              getRowId={(lease) => lease.account}
+              className="platform-lease-table"
+              wrapClassName="platform-lease-table-wrap"
+            />
+          ) : null}
+        </section>
+
+        <div className="platform-ops-list">
+          <div className="platform-op-item">
+            <div className="platform-op-copy">
+              <h5>{t("重置为默认配置")}</h5>
+              <p className="platform-op-hint">{t("恢复默认设置，并覆盖当前修改。")}</p>
+            </div>
+            <Button type="button" variant="secondary" onClick={() => void onReset()} disabled={resetPending}>
+              {resetPending ? t("重置中...") : t("重置为默认配置")}
+            </Button>
+          </div>
+
+          <div className="platform-op-item">
+            <div className="platform-op-copy">
+              <h5>{t("清除所有租约")}</h5>
+              <p className="platform-op-hint">{t("立即清除当前平台的全部租约，下次请求将重新分配出口。")}</p>
+            </div>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => void clearLeasesMutation.mutateAsync()}
+              disabled={clearLeasesMutation.isPending}
+            >
+              {clearLeasesMutation.isPending ? t("清除中...") : t("清除所有租约")}
+            </Button>
+          </div>
+
+          <div className="platform-op-item">
+            <div className="platform-op-copy">
+              <h5>{t("删除平台")}</h5>
+              <p className="platform-op-hint">{t("永久删除当前平台及其配置，操作不可撤销。")}</p>
+            </div>
+            <Button type="button" variant="danger" onClick={() => void onDelete()} disabled={deleteDisabled || deletePending}>
+              {deletePending ? t("删除中...") : t("删除平台")}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <PlatformLeaseEditModal
+        open={editingLease !== null}
+        account={editingLease?.account ?? ""}
+        egressIP={draftEgressIP}
+        currentEgressIP={editingLease?.egress_ip ?? null}
+        candidateIPs={candidateIPs}
+        isLeaseLoading={false}
+        areCandidatesLoading={ipLoadQuery.isLoading}
+        candidatesLoadFailed={ipLoadQuery.isError}
+        isSaving={assignMutation.isPending}
+        onClose={() => {
+          if (assignMutation.isPending) {
+            return;
+          }
+
+          closeEditModal();
+        }}
+        onEgressIPChange={setDraftEgressIP}
+        onSubmit={() => void assignMutation.mutateAsync()}
+      />
+    </>
+  );
+}

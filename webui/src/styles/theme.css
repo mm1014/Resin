@@ -2648,6 +2648,43 @@ a {
   justify-content: flex-end;
 }
 
+.platform-lease-ops-layout {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.platform-lease-table-wrap {
+  margin-top: 0;
+  max-height: 520px;
+}
+
+.platform-lease-table {
+  min-width: 760px;
+}
+
+.platform-lease-table-wrap .data-table tbody tr {
+  cursor: default;
+}
+
+.platform-lease-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.platform-lease-cell small {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.platform-lease-actions {
+  width: 100%;
+  justify-content: flex-end;
+}
+
 .platform-ops-list {
   --platform-op-btn-width: 164px;
   display: flex;
