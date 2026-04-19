@@ -141,6 +141,9 @@ func (s *inboundDemuxServer) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-waitDone:
+		if httpErr == nil {
+			return ctx.Err()
+		}
 		return httpErr
 	case <-ctx.Done():
 		s.closeActiveConns()
@@ -148,6 +151,9 @@ func (s *inboundDemuxServer) Shutdown(ctx context.Context) error {
 			_ = s.httpServer.Close()
 		}
 		<-waitDone
+		if httpErr == nil {
+			return ctx.Err()
+		}
 		return httpErr
 	}
 }
