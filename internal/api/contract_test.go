@@ -608,6 +608,120 @@ func TestAPIContract_ListLeases_FuzzyValidation(t *testing.T) {
 	assertErrorCode(t, rec, "INVALID_ARGUMENT")
 }
 
+func TestAPIContract_AssignLeaseToEgressIP(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+
+	platformID := mustCreatePlatform(t, srv, "lease-assign-target")
+	sub := subscription.NewSubscription("sub-lease-assign", "Assign", "https://example.com/assign", true, false)
+	cp.SubMgr.Register(sub)
+
+	raw := []byte(`{"type":"ss","server":"203.0.113.200","port":443}`)
+	hash := node.HashFromRawOptions(raw)
+	cp.Pool.AddNodeFromSub(hash, raw, sub.ID)
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+
+	entry, ok := cp.Pool.GetEntry(hash)
+	if !ok {
+		t.Fatalf("node %s missing after AddNodeFromSub", hash.Hex())
+	}
+	entry.SetEgressIP(netip.MustParseAddr("203.0.113.50"))
+	if entry.LatencyTable == nil {
+		t.Fatalf("node %s latency table not initialized", hash.Hex())
+	}
+	entry.LatencyTable.Update("example.com", 25*time.Millisecond, 10*time.Minute)
+	ob := testutil.NewNoopOutbound()
+	entry.Outbound.Store(&ob)
+	cp.Pool.RecordResult(hash, true)
+	cp.Pool.NotifyNodeDirty(hash)
+
+	rec := doJSONRequest(
+		t,
+		srv,
+		http.MethodPost,
+		"/api/v1/platforms/"+platformID+"/leases/manual-account/actions/assign",
+		map[string]any{"egress_ip": "203.0.113.50"},
+		true,
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("assign lease status: got %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	body := decodeJSONMap(t, rec)
+	if body["platform_id"] != platformID {
+		t.Fatalf("assign lease platform_id: got %v, want %q", body["platform_id"], platformID)
+	}
+	if body["account"] != "manual-account" {
+		t.Fatalf("assign lease account: got %v, want %q", body["account"], "manual-account")
+	}
+	if body["node_hash"] != hash.Hex() {
+		t.Fatalf("assign lease node_hash: got %v, want %q", body["node_hash"], hash.Hex())
+	}
+	if body["node_tag"] != "Assign/tag" {
+		t.Fatalf("assign lease node_tag: got %v, want %q", body["node_tag"], "Assign/tag")
+	}
+	if body["egress_ip"] != "203.0.113.50" {
+		t.Fatalf("assign lease egress_ip: got %v, want %q", body["egress_ip"], "203.0.113.50")
+	}
+
+	stored := cp.Router.ReadLease(model.LeaseKey{PlatformID: platformID, Account: "manual-account"})
+	if stored == nil {
+		t.Fatal("expected assigned lease")
+	}
+	if stored.NodeHash != hash.Hex() {
+		t.Fatalf("assigned node_hash: got %q, want %q", stored.NodeHash, hash.Hex())
+	}
+	if stored.EgressIP != "203.0.113.50" {
+		t.Fatalf("assigned egress_ip: got %q, want %q", stored.EgressIP, "203.0.113.50")
+	}
+}
+
+func TestAPIContract_AssignLeaseToEgressIP_Validation(t *testing.T) {
+	srv, _, _ := newControlPlaneTestServer(t)
+	platformID := mustCreatePlatform(t, srv, "lease-assign-validation")
+
+	rec := doJSONRequest(
+		t,
+		srv,
+		http.MethodPost,
+		"/api/v1/platforms/not-a-uuid/leases/manual-account/actions/assign",
+		map[string]any{"egress_ip": "203.0.113.50"},
+		true,
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid platform_id status: got %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+
+	rec = doJSONRequest(
+		t,
+		srv,
+		http.MethodPost,
+		"/api/v1/platforms/"+platformID+"/leases/%20/actions/assign",
+		map[string]any{"egress_ip": "203.0.113.50"},
+		true,
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid account status: got %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+
+	rec = doJSONRequest(
+		t,
+		srv,
+		http.MethodPost,
+		"/api/v1/platforms/"+platformID+"/leases/manual-account/actions/assign",
+		map[string]any{
+			"egress_ip": "203.0.113.50",
+			"extra":     "unexpected",
+		},
+		true,
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid body status: got %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+}
+
 func TestAPIContract_PaginationAndSorting(t *testing.T) {
 	srv, _, _ := newControlPlaneTestServer(t)
 

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper } from "@tanstack/react-table";
 import { AlertTriangle, Sparkles } from "lucide-react";
 import { DataTable } from "../../../components/ui/DataTable";
+import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/Button";
 import { useI18n } from "../../../i18n";
 import { formatApiErrorMessage } from "../../../lib/error-message";
@@ -23,9 +24,39 @@ type PlatformLeaseOpsPanelProps = {
 
 const LEASE_FETCH_LIMIT = 1000;
 const IP_LOAD_FETCH_LIMIT = 1000;
+const NODE_TAG_TONES = [
+  { color: "#1d4ed8", backgroundColor: "#dbeafe", borderColor: "#60a5fa" },
+  { color: "#be123c", backgroundColor: "#ffe4e6", borderColor: "#fda4af" },
+  { color: "#166534", backgroundColor: "#dcfce7", borderColor: "#86efac" },
+  { color: "#6d28d9", backgroundColor: "#ede9fe", borderColor: "#c4b5fd" },
+  { color: "#a16207", backgroundColor: "#fef3c7", borderColor: "#fcd34d" },
+  { color: "#0f766e", backgroundColor: "#ccfbf1", borderColor: "#5eead4" },
+  { color: "#c2410c", backgroundColor: "#ffedd5", borderColor: "#fdba74" },
+  { color: "#4338ca", backgroundColor: "#e0e7ff", borderColor: "#a5b4fc" },
+  { color: "#4d7c0f", backgroundColor: "#ecfccb", borderColor: "#bef264" },
+  { color: "#a21caf", backgroundColor: "#fae8ff", borderColor: "#f0abfc" },
+  { color: "#b91c1c", backgroundColor: "#fee2e2", borderColor: "#fca5a5" },
+  { color: "#075985", backgroundColor: "#e0f2fe", borderColor: "#7dd3fc" },
+] as const;
 
 function shortNodeHash(nodeHash: string): string {
   return nodeHash ? nodeHash.slice(0, 12) : "-";
+}
+
+function hashColorSeed(seed: string): number {
+  let value = 0;
+
+  for (let index = 0; index < seed.length; index += 1) {
+    value = (value * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+
+  return value;
+}
+
+function nodeTagToneStyle(egressIP: string, nodeTag: string, nodeHash: string) {
+  const colorSeed = egressIP.trim() || `${nodeTag}:${nodeHash}`;
+  const seed = hashColorSeed(colorSeed);
+  return NODE_TAG_TONES[seed % NODE_TAG_TONES.length];
 }
 
 export function PlatformLeaseOpsPanel({
@@ -142,6 +173,24 @@ export function PlatformLeaseOpsPanel({
   const leaseTotal = leasesQuery.data?.total ?? leases.length;
   const leaseListTruncated = leaseTotal > leases.length;
   const candidateIPs = (ipLoadQuery.data?.items ?? []).map((entry) => entry.egress_ip);
+  const egressIPToneMap = useMemo(() => {
+    const uniqueIPs = Array.from(new Set(leases.map((lease) => lease.egress_ip?.trim()).filter(Boolean))).sort((left, right) =>
+      left.localeCompare(right),
+    );
+
+    return new Map(uniqueIPs.map((ip, index) => [ip, NODE_TAG_TONES[index % NODE_TAG_TONES.length]]));
+  }, [leases]);
+
+  const toneStyleForLease = (lease: PlatformLease) => {
+    const egressIP = lease.egress_ip?.trim() ?? "";
+
+    if (egressIP) {
+      return egressIPToneMap.get(egressIP) ?? nodeTagToneStyle(egressIP, lease.node_tag, lease.node_hash);
+    }
+
+    return nodeTagToneStyle("", lease.node_tag, lease.node_hash);
+  };
+
   const col = useMemo(() => createColumnHelper<PlatformLease>(), []);
   const leaseColumns = useMemo(
     () => [
@@ -160,7 +209,17 @@ export function PlatformLeaseOpsPanel({
           const lease = info.row.original;
           return (
             <div className="platform-lease-cell">
-              <span>{lease.node_tag || "-"}</span>
+              {lease.node_tag ? (
+                <Badge
+                  className="platform-node-pill"
+                  style={toneStyleForLease(lease)}
+                  title={`${lease.node_tag}${lease.egress_ip ? `\n出口 IP: ${lease.egress_ip}` : ""}`}
+                >
+                  {lease.node_tag}
+                </Badge>
+              ) : (
+                <span className="platform-node-pill-empty">-</span>
+              )}
               <small>{shortNodeHash(lease.node_hash)}</small>
             </div>
           );
@@ -192,7 +251,7 @@ export function PlatformLeaseOpsPanel({
         ),
       }),
     ],
-    [col, destructiveActionPending, t],
+    [col, destructiveActionPending, t, toneStyleForLease],
   );
 
   return (

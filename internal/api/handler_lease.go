@@ -9,6 +9,10 @@ import (
 	"github.com/Resinat/Resin/internal/service"
 )
 
+type assignLeaseToEgressIPRequest struct {
+	EgressIP string `json:"egress_ip"`
+}
+
 func validateAccountPath(r *http.Request) (string, error) {
 	account := PathParam(r, "account")
 	if strings.TrimSpace(account) == "" {
@@ -146,6 +150,35 @@ func HandleDeleteLease(cp *service.ControlPlaneService) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// HandleAssignLeaseToEgressIP returns a handler for POST /api/v1/platforms/{id}/leases/{account}/actions/assign.
+func HandleAssignLeaseToEgressIP(cp *service.ControlPlaneService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		platformID, ok := requireUUIDPathParam(w, r, "id", "platform_id")
+		if !ok {
+			return
+		}
+		account, err := validateAccountPath(r)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+
+		var req assignLeaseToEgressIPRequest
+		if err := DecodeBody(r, &req); err != nil {
+			writeDecodeBodyError(w, err)
+			return
+		}
+
+		lease, err := cp.AssignLeaseToEgressIP(platformID, account, req.EgressIP)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+
+		WriteJSON(w, http.StatusOK, lease)
 	}
 }
 

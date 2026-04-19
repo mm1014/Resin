@@ -378,3 +378,137 @@ func TestInheritLeaseByPlatformName_InvalidArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestAssignLeaseToEgressIP_Success(t *testing.T) {
+	cp, plat := newLeaseInheritanceTestService()
+
+	sub := subscription.NewSubscription("sub-assign-success", "AssignSuccess", "https://example.com/assign-success", true, false)
+	cp.SubMgr.Register(sub)
+	hash := addRoutableNodeForSubscription(
+		t,
+		cp.Pool,
+		sub,
+		[]byte(`{"type":"ss","server":"203.0.113.200","port":443}`),
+		"203.0.113.50",
+	)
+
+	got, err := cp.AssignLeaseToEgressIP(plat.ID, "manual-account", "203.0.113.50")
+	if err != nil {
+		t.Fatalf("AssignLeaseToEgressIP: %v", err)
+	}
+	if got.PlatformID != plat.ID {
+		t.Fatalf("platform_id: got %q, want %q", got.PlatformID, plat.ID)
+	}
+	if got.Account != "manual-account" {
+		t.Fatalf("account: got %q, want %q", got.Account, "manual-account")
+	}
+	if got.NodeHash != hash.Hex() {
+		t.Fatalf("node_hash: got %q, want %q", got.NodeHash, hash.Hex())
+	}
+	if got.EgressIP != "203.0.113.50" {
+		t.Fatalf("egress_ip: got %q, want %q", got.EgressIP, "203.0.113.50")
+	}
+	if got.NodeTag != "AssignSuccess/tag" {
+		t.Fatalf("node_tag: got %q, want %q", got.NodeTag, "AssignSuccess/tag")
+	}
+
+	stored := cp.Router.ReadLease(model.LeaseKey{PlatformID: plat.ID, Account: "manual-account"})
+	if stored == nil {
+		t.Fatal("expected stored lease")
+	}
+	if stored.NodeHash != hash.Hex() {
+		t.Fatalf("stored node_hash: got %q, want %q", stored.NodeHash, hash.Hex())
+	}
+	if stored.EgressIP != "203.0.113.50" {
+		t.Fatalf("stored egress_ip: got %q, want %q", stored.EgressIP, "203.0.113.50")
+	}
+}
+
+func TestAssignLeaseToEgressIP_OverwritesExistingLease(t *testing.T) {
+	cp, plat := newLeaseInheritanceTestService()
+
+	sub := subscription.NewSubscription("sub-assign-overwrite", "AssignOverwrite", "https://example.com/assign-overwrite", true, false)
+	cp.SubMgr.Register(sub)
+	oldHash := addRoutableNodeForSubscription(
+		t,
+		cp.Pool,
+		sub,
+		[]byte(`{"type":"ss","server":"198.51.100.10","port":443}`),
+		"203.0.113.60",
+	)
+	newHash := addRoutableNodeForSubscription(
+		t,
+		cp.Pool,
+		sub,
+		[]byte(`{"type":"ss","server":"198.51.100.11","port":443}`),
+		"203.0.113.61",
+	)
+
+	now := time.Now().UnixNano()
+	seedLease(t, cp, model.Lease{
+		PlatformID:     plat.ID,
+		Account:        "manual-account",
+		NodeHash:       oldHash.Hex(),
+		EgressIP:       "203.0.113.60",
+		CreatedAtNs:    now - int64(time.Minute),
+		ExpiryNs:       now + int64(time.Minute),
+		LastAccessedNs: now - int64(time.Second),
+	})
+
+	got, err := cp.AssignLeaseToEgressIP(plat.ID, "manual-account", "203.0.113.61")
+	if err != nil {
+		t.Fatalf("AssignLeaseToEgressIP: %v", err)
+	}
+	if got.NodeHash != newHash.Hex() {
+		t.Fatalf("node_hash after overwrite: got %q, want %q", got.NodeHash, newHash.Hex())
+	}
+	if got.EgressIP != "203.0.113.61" {
+		t.Fatalf("egress_ip after overwrite: got %q, want %q", got.EgressIP, "203.0.113.61")
+	}
+
+	stored := cp.Router.ReadLease(model.LeaseKey{PlatformID: plat.ID, Account: "manual-account"})
+	if stored == nil {
+		t.Fatal("expected overwritten lease")
+	}
+	if stored.NodeHash != newHash.Hex() {
+		t.Fatalf("stored node_hash after overwrite: got %q, want %q", stored.NodeHash, newHash.Hex())
+	}
+	if stored.EgressIP != "203.0.113.61" {
+		t.Fatalf("stored egress_ip after overwrite: got %q, want %q", stored.EgressIP, "203.0.113.61")
+	}
+}
+
+func TestAssignLeaseToEgressIP_InvalidEgressIP(t *testing.T) {
+	cp, plat := newLeaseInheritanceTestService()
+
+	errCases := []string{"", "   ", "not-an-ip"}
+	for _, egressIP := range errCases {
+		t.Run(egressIP, func(t *testing.T) {
+			_, err := cp.AssignLeaseToEgressIP(plat.ID, "manual-account", egressIP)
+			if err == nil {
+				t.Fatal("expected INVALID_ARGUMENT error")
+			}
+			assertServiceErrorCode(t, err, "INVALID_ARGUMENT")
+		})
+	}
+}
+
+func TestAssignLeaseToEgressIP_TargetIPNotFound(t *testing.T) {
+	cp, plat := newLeaseInheritanceTestService()
+
+	sub := subscription.NewSubscription("sub-assign-miss", "AssignMiss", "https://example.com/assign-miss", true, false)
+	cp.SubMgr.Register(sub)
+	addRoutableNodeForSubscription(
+		t,
+		cp.Pool,
+		sub,
+		[]byte(`{"type":"ss","server":"192.0.2.10","port":443}`),
+		"203.0.113.70",
+	)
+
+	_, err := cp.AssignLeaseToEgressIP(plat.ID, "manual-account", "203.0.113.71")
+	if err == nil {
+		t.Fatal("expected NOT_FOUND error")
+	}
+	assertServiceErrorCode(t, err, "NOT_FOUND")
+}

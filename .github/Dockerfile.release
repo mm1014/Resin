@@ -14,7 +14,8 @@ RUN apk add --no-cache ca-certificates tzdata su-exec \
 # Buildx provides TARGETOS (linux) and TARGETARCH (amd64 or arm64)
 COPY release-bin/${TARGETOS}/${TARGETARCH}/resin-${TARGETOS}-${TARGETARCH} /usr/local/bin/resin
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 2260
 VOLUME ["/var/cache/resin", "/var/lib/resin", "/var/log/resin"]

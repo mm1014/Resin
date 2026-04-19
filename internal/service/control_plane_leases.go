@@ -1,6 +1,7 @@
 package service
 
 import (
+	"net/netip"
 	"strings"
 	"time"
 
@@ -84,6 +85,68 @@ func (s *ControlPlaneService) GetLease(platformID, account string) (*LeaseRespon
 		return nil, notFound("lease not found")
 	}
 	resp := leaseToResponse(*ml, s.resolveLeaseNodeTagFromHex(ml.NodeHash))
+	return &resp, nil
+}
+
+// AssignLeaseToEgressIP manually binds an account lease to a routable node
+// whose egress IP matches the requested address.
+func (s *ControlPlaneService) AssignLeaseToEgressIP(platformID, account, egressIP string) (*LeaseResponse, error) {
+	plat, ok := s.Pool.GetPlatform(platformID)
+	if !ok {
+		return nil, notFound("platform not found")
+	}
+
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return nil, invalidArg("account: must be non-empty")
+	}
+
+	egressIP = strings.TrimSpace(egressIP)
+	if egressIP == "" {
+		return nil, invalidArg("egress_ip: must be non-empty")
+	}
+
+	targetIP, err := netip.ParseAddr(egressIP)
+	if err != nil {
+		return nil, invalidArg("egress_ip: invalid format")
+	}
+
+	chosenHash := node.Zero
+	plat.View().Range(func(h node.Hash) bool {
+		entry, ok := s.Pool.GetEntry(h)
+		if !ok || entry.GetEgressIP() != targetIP {
+			return true
+		}
+		if chosenHash == node.Zero || h.Hex() < chosenHash.Hex() {
+			chosenHash = h
+		}
+		return true
+	})
+	if chosenHash == node.Zero {
+		return nil, notFound("egress_ip not found in platform view")
+	}
+
+	now := time.Now()
+	nowNs := now.UnixNano()
+	ttl := plat.StickyTTLNs
+	if ttl <= 0 {
+		ttl = int64(24 * time.Hour)
+	}
+
+	lease := model.Lease{
+		PlatformID:     plat.ID,
+		Account:        account,
+		NodeHash:       chosenHash.Hex(),
+		EgressIP:       targetIP.String(),
+		CreatedAtNs:    nowNs,
+		ExpiryNs:       now.Add(time.Duration(ttl)).UnixNano(),
+		LastAccessedNs: nowNs,
+	}
+	if err := s.Router.UpsertLease(lease); err != nil {
+		return nil, internal("assign lease", err)
+	}
+
+	resp := leaseToResponse(lease, s.resolveLeaseNodeTag(chosenHash))
 	return &resp, nil
 }
 
