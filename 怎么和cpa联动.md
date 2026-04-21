@@ -46,6 +46,6 @@ docker compose up -d
 
 # 3.如果”别的号池“也是Docker容器，但是不喝Resin在同一个compose/network里，填：
 ```bash
-  http://Default.acc_001:123@host.docker.internal:2260
+  http://codex.acc_001:123@host.docker.internal:2260
 ```
 
