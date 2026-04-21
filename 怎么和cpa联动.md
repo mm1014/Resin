@@ -1,12 +1,12 @@
 # 1.如果“别的号池”是在宿主机上跑，代理地址填：
 ```bash
-http://Default.acc_001:123@127.0.0.1:2260
+http://codex.acc_001:123@127.0.0.1:2260
 ```
 
 
 # 2.如果“别的号池”也是 Docker 容器，并且和 Resin 在同一个 compose/network 里，填：
 ```bash
-http://Default.acc_001:123@resin:2260
+http://codex.acc_001:123@resin:2260
 ```
 ## 如何创建网络并联动：
 先创建一个公共网络：
