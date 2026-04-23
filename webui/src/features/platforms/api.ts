@@ -128,6 +128,12 @@ export async function clearAllPlatformLeases(id: string): Promise<void> {
   });
 }
 
+export async function deletePlatformLease(id: string, account: string): Promise<void> {
+  await apiRequest<void>(`${basePath}/${id}/leases/${encodeURIComponent(account)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function listPlatformLeases(
   id: string,
   input: ListPlatformLeasesInput = {},

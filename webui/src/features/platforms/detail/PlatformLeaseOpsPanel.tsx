@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper } from "@tanstack/react-table";
 import { AlertTriangle, Sparkles } from "lucide-react";
@@ -8,7 +8,13 @@ import { Button } from "../../../components/ui/Button";
 import { useI18n } from "../../../i18n";
 import { formatApiErrorMessage } from "../../../lib/error-message";
 import { formatDateTime } from "../../../lib/time";
-import { assignPlatformLeaseToEgressIP, clearAllPlatformLeases, listPlatformIPLoad, listPlatformLeases } from "../api";
+import {
+  assignPlatformLeaseToEgressIP,
+  clearAllPlatformLeases,
+  deletePlatformLease,
+  listPlatformIPLoad,
+  listPlatformLeases,
+} from "../api";
 import type { Platform, PlatformLease } from "../types";
 import { PlatformLeaseEditModal } from "./PlatformLeaseEditModal";
 
@@ -168,8 +174,41 @@ export function PlatformLeaseOpsPanel({
     },
   });
 
-  const destructiveActionPending = resetPending || clearLeasesMutation.isPending || deletePending;
-  const leases = leasesQuery.data?.items ?? [];
+  const deleteLeaseMutation = useMutation({
+    mutationFn: async (lease: PlatformLease) => {
+      const confirmed = window.confirm(
+        t("确认删除账号 {{account}} 的租约？下次请求将重新分配出口。", { account: lease.account }),
+      );
+      if (!confirmed) {
+        return null;
+      }
+
+      await deletePlatformLease(platform.id, lease.account);
+      return lease;
+    },
+    onSuccess: async (deletedLease) => {
+      if (!deletedLease) {
+        return;
+      }
+
+      if (editingLease?.account === deletedLease.account) {
+        closeEditModal();
+      }
+      await invalidateLeaseData();
+      await invalidatePlatformMonitor();
+      showToast("success", t("账号 {{account}} 的租约已删除", { account: deletedLease.account }));
+    },
+    onError: (error) => {
+      showToast("error", formatApiErrorMessage(error, t));
+    },
+  });
+  const deleteLeasePending = deleteLeaseMutation.isPending;
+  const deletingLease = deleteLeaseMutation.variables;
+  const deleteLeaseMutateAsync = deleteLeaseMutation.mutateAsync;
+
+  const destructiveActionPending =
+    resetPending || clearLeasesMutation.isPending || deleteLeasePending || deletePending;
+  const leases = useMemo(() => leasesQuery.data?.items ?? [], [leasesQuery.data?.items]);
   const leaseTotal = leasesQuery.data?.total ?? leases.length;
   const leaseListTruncated = leaseTotal > leases.length;
   const candidateIPs = (ipLoadQuery.data?.items ?? []).map((entry) => entry.egress_ip);
@@ -181,15 +220,18 @@ export function PlatformLeaseOpsPanel({
     return new Map(uniqueIPs.map((ip, index) => [ip, NODE_TAG_TONES[index % NODE_TAG_TONES.length]]));
   }, [leases]);
 
-  const toneStyleForLease = (lease: PlatformLease) => {
-    const egressIP = lease.egress_ip?.trim() ?? "";
+  const toneStyleForLease = useCallback(
+    (lease: PlatformLease) => {
+      const egressIP = lease.egress_ip?.trim() ?? "";
 
-    if (egressIP) {
-      return egressIPToneMap.get(egressIP) ?? nodeTagToneStyle(egressIP, lease.node_tag, lease.node_hash);
-    }
+      if (egressIP) {
+        return egressIPToneMap.get(egressIP) ?? nodeTagToneStyle(egressIP, lease.node_tag, lease.node_hash);
+      }
 
-    return nodeTagToneStyle("", lease.node_tag, lease.node_hash);
-  };
+      return nodeTagToneStyle("", lease.node_tag, lease.node_hash);
+    },
+    [egressIPToneMap],
+  );
 
   const col = useMemo(() => createColumnHelper<PlatformLease>(), []);
   const leaseColumns = useMemo(
@@ -247,11 +289,20 @@ export function PlatformLeaseOpsPanel({
             >
               {t("编辑")}
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="danger"
+              disabled={destructiveActionPending}
+              onClick={() => void deleteLeaseMutateAsync(info.row.original)}
+            >
+              {deleteLeasePending && deletingLease?.account === info.row.original.account ? t("删除中...") : t("删除")}
+            </Button>
           </div>
         ),
       }),
     ],
-    [col, destructiveActionPending, t, toneStyleForLease],
+    [col, deleteLeaseMutateAsync, deleteLeasePending, deletingLease, destructiveActionPending, t, toneStyleForLease],
   );
 
   return (

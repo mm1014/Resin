@@ -627,6 +627,7 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "平台 {{name}} 已重置为默认配置": "Platform {{name}} reset to defaults",
   "平台 {{name}} 的所有租约已清除": "All leases for platform {{name}} cleared",
   "账号 {{account}} 已绑定到出口 IP {{ip}}": "Account {{account}} is now bound to egress IP {{ip}}",
+  "账号 {{account}} 的租约已删除": "Lease for account {{account}} deleted",
   "请求日志详情 {{id}}": "Request log details {{id}}",
   "确认立即清理订阅 {{name}} 中的熔断或异常节点？":
     "Clean circuit-open or failed nodes in subscription {{name}} now?",
@@ -635,6 +636,8 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "确认删除规则 {{prefix}} 吗？": "Delete rule {{prefix}}?",
   "确认删除平台 {{name}}？该操作不可撤销。":
     "Delete platform {{name}}? This action cannot be undone.",
+  "确认删除账号 {{account}} 的租约？下次请求将重新分配出口。":
+    "Delete the lease for account {{account}}? The next request will be reassigned to an egress IP.",
   "确认清除平台 {{name}} 的所有租约？":
     "Clear all leases for platform {{name}}?",
   "入站": "Inbound",
