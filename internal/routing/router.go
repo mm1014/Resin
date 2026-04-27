@@ -33,6 +33,7 @@ type Router struct {
 	authorities     func() []string
 	p2cWindow       func() time.Duration
 	onLeaseEvent    LeaseEventFunc
+	onNoAvailable   func(platformID string)
 	nodeTagResolver func(node.Hash) string
 }
 
@@ -42,6 +43,9 @@ type RouterConfig struct {
 	P2CWindow   func() time.Duration
 	// OnLeaseEvent is called synchronously; handlers must stay lightweight.
 	OnLeaseEvent LeaseEventFunc
+	// OnNoAvailableNodes is called synchronously when routing cannot find a
+	// usable node for an existing platform. Handlers must stay lightweight.
+	OnNoAvailableNodes func(platformID string)
 	// NodeTagResolver resolves a node hash to its display tag ("<Sub>/<Tag>").
 	// If nil, NodeTag will be empty.
 	NodeTagResolver func(node.Hash) string
@@ -54,6 +58,7 @@ func NewRouter(cfg RouterConfig) *Router {
 		authorities:     cfg.Authorities,
 		p2cWindow:       cfg.P2CWindow,
 		onLeaseEvent:    cfg.OnLeaseEvent,
+		onNoAvailable:   cfg.OnNoAvailableNodes,
 		nodeTagResolver: cfg.NodeTagResolver,
 	}
 }
@@ -92,6 +97,9 @@ func (r *Router) RouteRequest(platName, account, target string) (RouteResult, er
 		result, err = r.routeSticky(plat, state, account, targetDomain, time.Now())
 	}
 	if err != nil {
+		if errors.Is(err, ErrNoAvailableNodes) {
+			r.emitNoAvailableNodes(plat.ID)
+		}
 		return RouteResult{}, err
 	}
 	result = withPlatformContext(plat, result)
@@ -385,6 +393,12 @@ func abortLeaseCreate(current Lease, hadPreviousLease bool) (Lease, xsync.Comput
 func (r *Router) emitLeaseEvent(event LeaseEvent) {
 	if r.onLeaseEvent != nil {
 		r.onLeaseEvent(event)
+	}
+}
+
+func (r *Router) emitNoAvailableNodes(platformID string) {
+	if r.onNoAvailable != nil {
+		r.onNoAvailable(platformID)
 	}
 }
 

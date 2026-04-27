@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -143,6 +144,16 @@ func (a *resinApp) initTopologyRuntime(engine *state.StateEngine) (*netutil.Retr
 		return nil, fmt.Errorf("topology runtime: %w", err)
 	}
 	a.topoRuntime = topoRuntime
+	var routePoolGeoLookup func(netip.Addr) string
+	if a.geoSvc != nil {
+		routePoolGeoLookup = a.geoSvc.Lookup
+	}
+	routePoolHealer := newRoutePoolSelfHealer(routePoolSelfHealerConfig{
+		Pool:                  a.topoRuntime.pool,
+		ProbeTrigger:          a.topoRuntime.probeMgr,
+		SubscriptionRefresher: a.topoRuntime.scheduler,
+		GeoLookup:             routePoolGeoLookup,
+	})
 
 	// Phase 4: OutboundManager and Router (now that pool exists).
 	log.Println("OutboundManager initialized with lifecycle callbacks")
@@ -155,6 +166,9 @@ func (a *resinApp) initTopologyRuntime(engine *state.StateEngine) (*netutil.Retr
 			return time.Duration(runtimeConfigSnapshot(a.runtimeCfg).P2CLatencyWindow)
 		},
 		NodeTagResolver: a.topoRuntime.pool.ResolveNodeDisplayTag,
+		OnNoAvailableNodes: func(platformID string) {
+			routePoolHealer.handleNoAvailableNodes(platformID)
+		},
 		// Lease events are emitted synchronously on routing paths.
 		// Keep this callback lightweight and non-blocking.
 		OnLeaseEvent: func(e routing.LeaseEvent) {

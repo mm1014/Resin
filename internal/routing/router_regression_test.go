@@ -159,6 +159,35 @@ func newTestRouter(pool PoolAccessor, onEvent LeaseEventFunc) *Router {
 	})
 }
 
+func TestRouteRequest_EmptyViewTriggersNoAvailableNodesCallback(t *testing.T) {
+	pool := newRouterTestPool()
+	plat := platform.NewPlatform("plat-empty", "Plat Empty", nil, nil)
+	pool.addPlatform(plat)
+
+	var called bool
+	var gotPlatformID string
+	router := NewRouter(RouterConfig{
+		Pool:        pool,
+		Authorities: func() []string { return []string{"cloudflare.com"} },
+		P2CWindow:   func() time.Duration { return 10 * time.Minute },
+		OnNoAvailableNodes: func(platformID string) {
+			called = true
+			gotPlatformID = platformID
+		},
+	})
+
+	_, err := router.RouteRequest(plat.Name, "", "https://example.com")
+	if !errors.Is(err, ErrNoAvailableNodes) {
+		t.Fatalf("expected ErrNoAvailableNodes, got %v", err)
+	}
+	if !called {
+		t.Fatal("expected OnNoAvailableNodes callback to be called")
+	}
+	if gotPlatformID != plat.ID {
+		t.Fatalf("callback platform id = %q, want %q", gotPlatformID, plat.ID)
+	}
+}
+
 func TestRouteRequest_SameIPRotationPrefersTargetLatencySample(t *testing.T) {
 	pool := newRouterTestPool()
 	plat := platform.NewPlatform("plat-1", "Plat-1", nil, nil)

@@ -328,6 +328,18 @@ func (m *ProbeManager) TriggerImmediateLatencyProbe(hash node.Hash) {
 	m.enqueueProbe(hash, probeTaskKindLatency, probePriorityNormal)
 }
 
+// TriggerHighPriorityEgressProbe enqueues an urgent async egress probe for a node.
+// Caller returns immediately.
+func (m *ProbeManager) TriggerHighPriorityEgressProbe(hash node.Hash) {
+	m.enqueueProbe(hash, probeTaskKindEgress, probePriorityHigh)
+}
+
+// TriggerHighPriorityLatencyProbe enqueues an urgent async latency probe for a node.
+// Caller returns immediately.
+func (m *ProbeManager) TriggerHighPriorityLatencyProbe(hash node.Hash) {
+	m.enqueueProbe(hash, probeTaskKindLatency, probePriorityHigh)
+}
+
 // EgressProbeResult holds the results of a synchronous egress probe.
 type EgressProbeResult struct {
 	EgressIP      string  `json:"egress_ip"`
