@@ -277,7 +277,7 @@ func TestRouteRequest_SameIPRotationPrefersTargetLatencySample(t *testing.T) {
 	}
 }
 
-func TestRouteRequest_SelectedNodeRemovedAfterPick_EmitsLeaseRemove(t *testing.T) {
+func TestRouteRequest_SelectedNodeRemovedAfterPick_PreservesLease(t *testing.T) {
 	pool := newRouterTestPool()
 	plat := platform.NewPlatform("plat-2", "Plat-2", nil, nil)
 	plat.StickyTTLNs = int64(time.Hour)
@@ -327,11 +327,15 @@ func TestRouteRequest_SelectedNodeRemovedAfterPick_EmitsLeaseRemove(t *testing.T
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, ok := state.Leases.GetLease("acct-race"); ok {
-		t.Fatal("lease should be removed when re-route fails after invalidation")
+	preserved, ok := state.Leases.GetLease("acct-race")
+	if !ok {
+		t.Fatal("lease should be preserved when re-route fails with no available nodes")
 	}
-	if got := state.IPLoadStats.Get(oldIP); got != 0 {
-		t.Fatalf("ip load should decrement exactly once, got %d", got)
+	if preserved.NodeHash != oldHash || preserved.EgressIP != oldIP {
+		t.Fatalf("preserved lease = hash %s ip %s, want hash %s ip %s", preserved.NodeHash.Hex(), preserved.EgressIP, oldHash.Hex(), oldIP)
+	}
+	if got := state.IPLoadStats.Get(oldIP); got != 1 {
+		t.Fatalf("ip load should remain while lease is preserved, got %d", got)
 	}
 
 	foundRemove := false
@@ -341,7 +345,7 @@ func TestRouteRequest_SelectedNodeRemovedAfterPick_EmitsLeaseRemove(t *testing.T
 			break
 		}
 	}
-	if !foundRemove {
-		t.Fatal("expected LeaseRemove event when old lease is dropped")
+	if foundRemove {
+		t.Fatal("expected no LeaseRemove event while old lease is preserved")
 	}
 }

@@ -239,6 +239,9 @@ func (r *Router) createOrAbortStickyLease(
 ) (Lease, xsync.ComputeOp, RouteResult, error) {
 	newLease, createdResult, err := r.createLease(plat, state, targetDomain, now, nowNs)
 	if err != nil {
+		if shouldPreservePreviousLease(hadPreviousLease, invalidation, err) {
+			return previous, xsync.CancelOp, RouteResult{}, err
+		}
 		r.cleanupPreviousLease(state, previous, hadPreviousLease, invalidation, plat.ID, account)
 		lease, op := abortLeaseCreate(previous, hadPreviousLease)
 		return lease, op, RouteResult{}, err
@@ -254,6 +257,16 @@ func (r *Router) createOrAbortStickyLease(
 		EgressIP:   newLease.EgressIP,
 	})
 	return newLease, xsync.UpdateOp, createdResult, nil
+}
+
+func shouldPreservePreviousLease(
+	hadPreviousLease bool,
+	invalidation leaseInvalidationReason,
+	err error,
+) bool {
+	return hadPreviousLease &&
+		invalidation == leaseInvalidationRemove &&
+		errors.Is(err, ErrNoAvailableNodes)
 }
 
 func (r *Router) tryLeaseHit(
