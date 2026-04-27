@@ -27,6 +27,11 @@ body,
   min-height: 100%;
 }
 
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
 body {
   font-family: "Manrope", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text);
@@ -34,6 +39,9 @@ body {
     radial-gradient(circle at 16% 22%, rgba(65, 162, 255, 0.2), transparent 36%),
     radial-gradient(circle at 85% 0%, rgba(255, 173, 85, 0.2), transparent 42%),
     linear-gradient(180deg, #fcfeff, #f2f7ff 60%, #eef4ff);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  background-size: 100vw 100vh;
   line-height: 1.45;
 }
 
@@ -733,10 +741,10 @@ a {
   justify-content: center;
   white-space: nowrap;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.2;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .platform-detail-tab:hover:not(.platform-detail-tab-active) {
@@ -751,7 +759,6 @@ a {
 .platform-detail-tab-active {
   color: #0f417d;
   background: #ffffff;
-  font-weight: 700;
   box-shadow: 0 1px 3px rgba(30, 60, 100, 0.08), 0 1px 2px rgba(30, 60, 100, 0.04);
 }
 
@@ -773,13 +780,6 @@ a {
 }
 
 .platform-detail-main-card .platform-detail-tabpanel {
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  padding: 0;
-}
-
-.platform-detail-main-card .platform-monitor-section {
   border: none;
   border-radius: 0;
   background: transparent;
@@ -2522,13 +2522,6 @@ a {
   display: flex;
   justify-content: flex-end;
   margin-top: 4px;
-}
-
-.platform-monitor-section {
-  border-color: rgba(37, 72, 120, 0.18);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(245, 251, 255, 0.95)),
-    radial-gradient(circle at 6% 12%, rgba(32, 104, 246, 0.11), transparent 46%);
 }
 
 .platform-monitor-head {
